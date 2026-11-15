@@ -1,0 +1,3 @@
+# These two are kept with LF line endings, as written; everything else is CRLF in the working copy.
+plugin.json text eol=lf
+tools/make_template_locs.py text eol=lf
