@@ -429,12 +429,20 @@ foreach ($sign in $signs) {
 # Each is named after the tile of its south-west corner, which is how the game names a zone's source.
 $templateSquareX = 65; $templateSquareZ = 10
 $templateSquare = [MapArt]::MapSquare($WikiMapFolder, $templateSquareX, $templateSquareZ)
+# Only the zones a forest uses get a picture: those src/data/zone_walkability.lua lists. The square's others are
+# blank and unused by the game, though the wiki's tile may show a little there.
+$walkabilityFile = Join-Path $PSScriptRoot "..\src\data\zone_walkability.lua"
+$usedZones = @{}
+foreach ($match in [regex]::Matches((Get-Content -Raw $walkabilityFile), '\["(\d+_\d+)"\]')) {
+    $usedZones[$match.Groups[1].Value] = $true
+}
 $zoneCount = 0
 for ($zoneX = 0; $zoneX -lt 8; $zoneX++) {
     for ($zoneZ = 0; $zoneZ -lt 8; $zoneZ++) {
+        $zoneName = "$($templateSquareX * 64 + $zoneX * 8)_$($templateSquareZ * 64 + $zoneZ * 8)"
+        if (-not $usedZones.ContainsKey($zoneName)) { continue }
         $zone = $templateSquare.Crop($zoneX * 64, (7 - $zoneZ) * 64, 64, 64)
         if ([MapArt]::ClearUnmapped($zone) -lt 0.05) { continue }
-        $zoneName = "$($templateSquareX * 64 + $zoneX * 8)_$($templateSquareZ * 64 + $zoneZ * 8)"
         $zone.Save((Join-Path $resourceFolder "zone_$zoneName.png"))
         $zoneCount++
     }

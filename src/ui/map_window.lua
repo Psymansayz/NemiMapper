@@ -306,9 +306,11 @@ local function tileOnMap(x, z)
 end
 
 -- Places one sprite per zone, showing the zone it was copied from, turned as the grid has it so the picture matches the
--- routes (src/game/forest_grid.lua guesses the turns from how the zones fit together).
+-- routes (src/game/forest_grid.lua reads the turns from the zones' standing heights).
+-- The pictures show at once and turn as the zones' turns become known (Forest.zoneTurns), before the grid settles.
 -- A zone's picture and angle are written only when they change, as this runs on every step of a resize.
 local function placeZones()
+    local turns = Forest.zoneTurns
     for index, zone in ipairs(Forest.zones) do
         local shown = parts.zones[index]
         if shown == nil then
@@ -319,14 +321,14 @@ local function placeZones()
         if shown.zone ~= zone then
             shown.zone, shown.angle = zone, nil
             shown.picture = picture("zone_" .. zone.sourceX .. "_" .. zone.sourceZ)
-            setHidden(sprite, shown.picture == nil)
             if shown.picture ~= nil then sprite.sprite = shown.picture end
         end
+        setHidden(sprite, shown.picture == nil)
         if shown.picture ~= nil then
             local left, bottom = tileOnMap(zone.x, zone.z)
             local right, top = tileOnMap(zone.x + ZONE_SIZE, zone.z + ZONE_SIZE)
             -- The grid turns clockwise, but in this client a positive sprite angle turns anticlockwise.
-            local angle = (4 - (Forest.grid and Forest.grid.turns[index] or 0)) % 4 * 90
+            local angle = (4 - (turns and turns[index] or 0)) % 4 * 90
             if shown.angle ~= angle then
                 shown.angle = angle
                 sprite.rotationDegrees = angle
@@ -338,7 +340,7 @@ local function placeZones()
         parts.zones[index].zone = nil
         setHidden(parts.zones[index].sprite, true)
     end
-    parts.zonesShown, parts.zonesTurnedBy = Forest.zones, Forest.grid
+    parts.zonesShown, parts.zonesTurnedBy = Forest.zones, Forest.zoneTurns
 end
 
 -- Draws a route (its corner tiles, in order) on the routes canvas. Canvas lines draw thicker than asked, so each
@@ -510,38 +512,50 @@ end
 -- keeps the last route's target (keep) while it is still a stop, so only finishing it, leaving the route or
 -- choosing again switch targets.
 -- keep is nil to plan afresh.
+-- Also returns the route's stops (entry -> true): its target alone, or every stop the plan must visit; and, while the
+-- route leads toward the forest's centre as keys are unseen, those keys' names.
 local function chosenRoute(player, keep)
     local held, blocked = toolsHeld(), ForestStops.barrierTiles()
-    -- Returns the route to the next of stops in the plan name, keeping the previous target while it is still a stop, or
-    -- with none reachable, to a door of keylessNeeded.
-    local function routeByPlan(name, stops, keylessNeeded)
-        local stop, playerSearch = nil, nil
-        for _, candidate in ipairs(stops) do
-            if keep ~= nil and candidate.entry == keep then stop = candidate end
+    -- Returns the stops a plan must visit, as entry -> true, with the doors waiting for an unseen key.
+    local function stopsOf(stops, keylessNeeded)
+        local entries = {}
+        for _, stop in ipairs(stops) do
+            if not stop.optional then entries[stop.entry] = true end
         end
+        for _, door in ipairs(keylessNeeded) do entries[door.entry] = true end
+        return entries
+    end
+    -- Returns the route to the next of stops in the plan name, keeping the previous target while it is still a stop.
+    -- With none reachable as a door of keylessNeeded waits for its key to be seen, it leads toward the forest's centre
+    -- in that door's colour, with no target: an NPC key (the lightning, the lost goebie) reaches the client only near
+    -- the player, and from the centre most of the forest is near. With no target, the plan is worked out again on
+    -- each redraw, so the key is gone for as soon as it is seen.
+    local function routeByPlan(name, stops, keylessNeeded)
+        local stop, playerSearch = ForestStops.keptStop(stops, keep), nil
         if stop == nil then
             stop, playerSearch = plannedStop(name, player, held, stops, ForestStops.tilesNotInPlan(stops, blocked))
         end
-        -- With no stop reachable, head for a barrier whose key is unseen, as walking there may bring the key's NPC
-        -- into view.
         if stop == nil then
-            local bestRoute, bestLength, bestDoor = nil, nil, nil
+            if #keylessNeeded == 0 then return nil end
+            local keysUnseen = {}
             for _, door in ipairs(keylessNeeded) do
-                local route, length = Routes.routeTo(Forest.grid, player, { door }, blocked)
-                if route ~= nil and (bestLength == nil or length < bestLength) then
-                    bestRoute, bestLength, bestDoor = route, length, door
-                end
+                keysUnseen[#keysUnseen + 1] = door.entry.feature.pair.source.name
             end
-            if bestRoute == nil then return nil end
-            return bestRoute, bestDoor.colour, bestDoor.entry
+            return Routes.routeTowardCentre(Forest.grid, player, blocked), keylessNeeded[1].colour, nil,
+                stopsOf(stops, keylessNeeded), keysUnseen
         end
         -- A kept plan's stop has the tiles its NPC stood on when the plan was made, so the route goes to where
         -- the NPC is now.
         local target = stop.entry.isNpc and ForestStops.stopOf(stop.kind, stop.entry, stop.colour) or stop
+        local route
         if playerSearch ~= nil then
-            return Routes.routeFrom(playerSearch, Forest.grid, { target }, blocked), stop.colour, stop.entry
+            route = Routes.routeFrom(playerSearch, Forest.grid, { target }, blocked)
+        else
+            route = Routes.routeTo(Forest.grid, player, { target }, blocked)
         end
-        return Routes.routeTo(Forest.grid, player, { target }, blocked), stop.colour, stop.entry
+        local entries = stopsOf(stops, keylessNeeded)
+        entries[stop.entry] = true
+        return route, stop.colour, stop.entry, entries
     end
     -- Returns the route to some tiles, in a colour.
     -- With barriers in the way, it follows a plan that opens them first, toward the stop stopAt gives for
@@ -549,7 +563,10 @@ local function chosenRoute(player, keep)
     -- targetOf gives the thing a route ends at.
     local function routeOrPlan(tiles, colour, name, targetOf, stopAt)
         local route = Routes.routeTo(Forest.grid, player, tiles, blocked)
-        if route ~= nil then return route, colour, targetOf(route) end
+        if route ~= nil then
+            local target = targetOf(route)
+            return route, colour, target, { [target] = true }
+        end
         local openRoute = Routes.routeTo(Forest.grid, player, tiles)
         if openRoute == nil then return nil end
         local stops, keylessNeeded = ForestStops.stopsToward({ stopAt(openRoute) }, player, held)
@@ -591,7 +608,13 @@ local function chosenRoute(player, keep)
     for _, toolPair in ipairs(ForestFeatures.tools) do
         if wantsRoute(toolPair) then
             local target = held[toolPair.source.key] and toolPair.barrier or toolPair.source
-            return routeToThing(target.kind, target.key, toolPair.colour)
+            local route, colour, targetEntry, stops, keysUnseen = routeToThing(target.kind, target.key, toolPair.colour)
+            -- A puzzle chosen is its key and its door, whichever the route leads to now, so both are its stops.
+            stops = stops or {}
+            for _, entry in ipairs(Forest.found) do
+                if entry.feature == toolPair.source or entry.feature == toolPair.barrier then stops[entry] = true end
+            end
+            return route, colour, targetEntry, stops, keysUnseen
         end
     end
     return nil
@@ -683,6 +706,32 @@ local function view()
     return redraw.view
 end
 
+local NO_STOPS = {}
+
+-- Returns whether two sets of a route's stops hold the same entries.
+local function sameStops(first, second)
+    for entry in pairs(first) do
+        if not second[entry] then return false end
+    end
+    for entry in pairs(second) do
+        if not first[entry] then return false end
+    end
+    return true
+end
+
+-- Shows, on the map's bottom left above the duplicates note, which keys the route walks toward the forest's centre to
+-- find (keysUnseen: their names), in the route's colour, or hides it with none. Written only on change.
+local function showKeysUnseen(keysUnseen, colour)
+    local content = keysUnseen and ("Walk to find " .. table.concat(keysUnseen, " and ")) or nil
+    if content == parts.keysUnseenShown and colour == parts.keysUnseenColour then return end
+    parts.keysUnseenShown, parts.keysUnseenColour = content, colour
+    setHidden(parts.keysUnseenText, content == nil)
+    if content ~= nil then
+        parts.keysUnseenText.content = content
+        parts.keysUnseenText.rgba = colour
+    end
+end
+
 -- Draws the chosen route in its target's colour, with the world beam on the target, or the final route in white
 -- when none is chosen and it is on. A search on every step would cost too much, so the route is kept
 -- (parts.routeDrawn) and worked out again only when the forest, the choice or the tools held change or the player
@@ -697,18 +746,20 @@ local function drawRoutes(afresh)
         showLegendStates()
     end
     local player = Forest.isInside and Forest.playerTile or nil
-    local route, colour, target = nil, nil, nil
+    local route, colour, target, stops, keysUnseen = nil, nil, nil, nil, nil
     if Forest.bounds ~= nil and Forest.grid ~= nil and player ~= nil and routeChosen() then
         local keep = not afresh and parts.routeDrawn and parts.routeDrawn.target or nil
-        route, colour, target = chosenRoute(player, keep)
+        route, colour, target, stops, keysUnseen = chosenRoute(player, keep)
     end
-    local targetBefore = parts.routeDrawn and parts.routeDrawn.target or nil
-    parts.routeDrawn = route and { tiles = route, colour = colour, target = target } or nil
-    -- The target's icon or sign may be shown only because it is the target.
-    if Settings.alwaysShowTarget and target ~= targetBefore then
+    local stopsBefore = parts.routeDrawn and parts.routeDrawn.stops or NO_STOPS
+    stops = route and stops or NO_STOPS
+    parts.routeDrawn = route and { tiles = route, colour = colour, target = target, stops = stops } or nil
+    -- A stop's icon or sign may be shown only because it is one of the route's stops.
+    if Settings.alwaysShowTarget and not sameStops(stops, stopsBefore) then
         placeMarkers()
         placeSigns()
     end
+    showKeysUnseen(route and keysUnseen, colour)
     if route ~= nil then
         if view().activeRoute then drawRoute(route, colour) end
     elseif Forest.bounds ~= nil and Forest.grid ~= nil and view().finalRoute and not routeChosen() then
@@ -716,7 +767,7 @@ local function drawRoutes(afresh)
         for index, finalRoute in ipairs(finalRoutes()) do drawRoute(finalRoute, FINAL_ROUTE_COLOUR, index > 1) end
     end
     -- An opening is not a thing found, so it gets no beam.
-    Highlights.beamOn(route and target and target.feature and target or nil)
+    Highlights.beamOn(route and target and target.feature and target or nil, stops)
     Highlights.showRoute(route, colour)
 end
 
@@ -780,9 +831,9 @@ end
 -- unneeded holds the puzzle entries no route to a node needs, when those are hidden.
 local function isShown(entry, held, unneeded)
     local shows, feature = view(), entry.feature
-    -- The route's target stays by its own setting, except a key just taken, as the route is about to move on.
+    -- The route's stops stay by their own setting, except a key just taken, as the route is about to move on.
     local drawn = parts.routeDrawn
-    if Settings.alwaysShowTarget and drawn ~= nil and drawn.target == entry
+    if Settings.alwaysShowTarget and drawn ~= nil and drawn.stops[entry]
         and not (feature.kind == "source" and held[feature.key]) then
         return true
     end
@@ -879,10 +930,10 @@ end
 -- north of it, its tip on the forest's edge. A sign whose opening is not on its side's edge is hidden, and a hidden
 -- sign stays while the chosen route leads to its opening, as a hidden icon does.
 placeSigns = function()
-    local target = Settings.alwaysShowTarget and parts.routeDrawn and parts.routeDrawn.target or nil
+    local stops = Settings.alwaysShowTarget and parts.routeDrawn and parts.routeDrawn.stops or NO_STOPS
     for _, sign in ipairs(parts.signs) do
         local opening = Forest.bounds ~= nil and ForestStops.openingOn(sign.side) or nil
-        if opening ~= nil and not view().entranceSigns and opening ~= target then opening = nil end
+        if opening ~= nil and not view().entranceSigns and not stops[opening] then opening = nil end
         setHidden(sign.sprite, opening == nil)
         if opening ~= nil then
             local scale = parts.frame.iconScale
@@ -1217,7 +1268,7 @@ end
 -- After a resize (isResize) the routes are only drawn again at the new size.
 local function showFound(isResize)
     -- A new grid may turn the zones differently.
-    if parts.zonesShown ~= Forest.zones or parts.zonesTurnedBy ~= Forest.grid then placeZones() end
+    if parts.zonesShown ~= Forest.zones or parts.zonesTurnedBy ~= Forest.zoneTurns then placeZones() end
     if isResize then redrawRoutes() else drawRoutes() end
     placeMarkers()
     placeSigns()
@@ -1611,6 +1662,7 @@ local function layout(contentWidth, contentHeight, isResize)
     setBox(parts.chrome, 0, 0, contentWidth, contentHeight)
     setBox(parts.map, frame.mapLeft, frame.mapTop, mapSize, mapSize)
     setBox(parts.duplicatesText, 8, mapSize - TEXT_HEIGHT - 6, mapSize - 16, TEXT_HEIGHT)
+    setBox(parts.keysUnseenText, 8, mapSize - 2 * TEXT_HEIGHT - 6, mapSize - 16, TEXT_HEIGHT)
     placeCompassSprite(parts.compassRing, COMPASS_RING_PIXELS, frame)
     placeCompassSprite(parts.compassBacking, COMPASS_BACKING_PIXELS, frame)
     placeCompassSprite(parts.compass, COMPASS_NEEDLE_PIXELS, frame)
@@ -1699,6 +1751,8 @@ local function build()
     parts.playerMarker.rgba = PLAYER_COLOUR
     parts.duplicatesText = addText(parts.map, TEXT_FONT, TEXT_COLOUR, ui.AlignMode.TOPLEFT,
         "DUPLICATE NODES DO NOT GIVE EXP")
+    parts.keysUnseenText = addText(parts.map, TEXT_FONT, TEXT_COLOUR, ui.AlignMode.TOPLEFT)
+    setHidden(parts.keysUnseenText, true)
 
     -- The ring is filled in the middle, so it goes under the backing and needle.
     parts.compassRing = addGameSprite(content, compassRingSprite())

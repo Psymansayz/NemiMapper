@@ -18,15 +18,11 @@ A RuneScape 3 plugin for scouting and mapping Nemi Forest instances on Mazcab.
   map to share.
 
 Open both windows from the plugin's page (the ribbon icon). Requires the PrettyUI plugin. The world number is
-read from the friends list: it shows once that list has been open. In the forest a draw distance of Low is raised
-to Medium, as at Low the game sends only part of the forest, and put back when you leave.
+read from the friends list: it shows once that list has been open. On entering a forest a draw distance below High
+is raised to High for a few seconds, until the whole forest's layout is read, then set back to yours.
 
 ## Credits
 
 - The node, task, tool and barrier icons and the forest's zone pictures are made from pictures and map tiles from the
   [RuneScape Wiki](https://runescape.wiki) (CC BY-NC-SA 3.0).
 - Special thanks to FC Nemi & Krystal Cove for hosting all these years!
-
-
-
-!setvar raid1_forest_player_perm_varp1 0

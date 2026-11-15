@@ -3,7 +3,7 @@
 --   WORLD|     region or not, map squares loaded, player tile, and the plugin's forest state
 --   BACKPACK|  slot, id, config name
 --   WORN|      the worn inventory's id (id.Inv.WORN), then slot, id, config name
---   TURNS|     quarter turns given to each zone to fit its neighbours, one row per line, south first
+--   TURNS|     quarter turns given to each zone by its standing heights, one row per line, south first
 --   ZONELOC|   every forest location by zone: the zone's south-west tile and source, then the location's id,
 --              config, tile within the zone (x east, z north), size, shape and rotation. Compared with the
 --              template's, these show how each zone was turned.

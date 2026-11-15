@@ -7,6 +7,7 @@ local ForestGrid = require("src/game/forest_grid")
 local StandingHeights = require("src/game/standing_heights")
 local DialogueText = require("src/game/dialogue_text")
 local DrawDistance = require("src/game/draw_distance")
+local ModelBounds = require("src/game/model_bounds")
 
 local Forest = {}
 
@@ -28,8 +29,8 @@ local SETTLING_TICKS = 8 -- server ticks to keep scanning after the last find or
 -- loaded inside the forest). Finds arrive over the first 2-4 ticks, never more than 2 apart.
 -- Scans still run for SETTLING_TICKS, since some locations arrive without an event, so a late find still shows.
 local SHOWN_SETTLED_AFTER = 4
--- Server ticks to scan after the player enters another zone. The client loads zones near the player (within the
--- draw distance) without an event if the server sent them earlier, and a teleport's zones load a tick later.
+-- Server ticks to look for NPCs after the player enters another zone: they reach the client only near the player,
+-- and a teleport's surroundings load a tick later.
 local ZONE_SCAN_TICKS = 3
 local SAME_NPC_DISTANCE = 16 -- tiles
 local NPC_DRIFTED = 2 -- tiles an NPC must drift from its marker before the marker moves
@@ -41,12 +42,11 @@ Forest.isInside = false
 Forest.isSearching = false -- more may still be found
 Forest.bounds = nil     -- { minX, minZ, width, length } in tiles; nil outside a forest
 Forest.zones = {}       -- [n] = { x, z, sourceX, sourceZ }: south-west tiles of a zone and of the zone it copies
-Forest.grid = nil       -- the forest's walkable tiles (src/game/forest_grid.lua)
+Forest.grid = nil       -- the forest's walkable tiles (src/game/forest_grid.lua), once its zones' turns are settled
+Forest.zoneTurns = nil  -- zone index -> quarter turns, as last worked out, settled or not: for the map's pictures
 Forest.openings = {}    -- [n] = { x, z }: the mouth of each opening (entrance, exit)
 Forest.standingByZone = {}  -- "x,z" of a zone -> what stands on its tiles (src/game/standing_heights.lua);
                             -- shows which way the zone was turned
-Forest.locationsByZone = {} -- "x,z" of a zone -> its locations { id, x, z, width, length, rotation }, x and z
-                            -- from the zone's south-west corner; also show its turn
 Forest.found = {}       -- [n] = { feature, x, z, width, length, isUsed }: centre in tiles, size, and for a node
                         -- whether it was used today; drawn in this order
 Forest.countOf = {}     -- feature key -> how many were found
@@ -119,8 +119,8 @@ local locationsFound = {} -- packed coordinate -> { feature, x, z }
 local npcsFound = {}      -- [n] = { feature, x, z }: where each was first seen
 local monstersSeen = {}   -- entity uid -> true, so a monster back in view is not a new spawn
 local foundChanged = false
--- The grid's inputs (locations, zones, standing heights) changed since it was built.
--- Other changes (a claim, a task, a follower) publish with the grid kept.
+-- The grid's inputs (the zones' standing heights) changed since it was built.
+-- Other changes (a find, a claim, a task, a follower) publish with the grid kept.
 local gridStale = false
 local arrivalTicksLeft = 0
 local settlingTicksLeft = 0
@@ -401,11 +401,16 @@ local function noteNpc(npcEntity)
         return
     end
     -- An NPC back in view is a new entity, so one near a known NPC of its kind is taken to be the same one. Its
-    -- marker stays where it was seen until it drifts far (followNpcs), and the keys (lightning, goebie) stay put
-    -- until the player takes them along. The world highlight follows the live entity (highlights.lua).
+    -- marker stays where it was seen until it drifts far (followNpcs). The world highlight follows the live entity
+    -- (highlights.lua). A forest has at most one of each NPC listed (the lightning, the lost goebie, the Traitor), so
+    -- one seen far from its marker has moved while out of view: the marker moves to it rather than a second one being
+    -- added.
     for _, known in ipairs(npcsFound) do
-        if known.feature == feature and math.abs(known.x - coord.x) <= SAME_NPC_DISTANCE
-            and math.abs(known.z - coord.z) <= SAME_NPC_DISTANCE then
+        if known.feature == feature then
+            if math.abs(known.x - coord.x) > SAME_NPC_DISTANCE or math.abs(known.z - coord.z) > SAME_NPC_DISTANCE then
+                known.x, known.z = coord.x + 0.5, coord.z + 0.5
+                if Forest.onNpcMoved then Forest.onNpcMoved(known) end
+            end
             return
         end
     end
@@ -416,39 +421,36 @@ local function noteNpc(npcEntity)
     foundChanged = true
 end
 
--- A location's model bounds for the highlight's box, in fine units relative to the centre of its south-west tile,
--- where the box's entity sits, and to the bounds' floor. The docs list `aabb` for NPCs only, so it is read under
--- pcall. nil when missing or empty, as a far model may not be loaded; the highlight then uses the tiles.
-local FINE_UNITS_PER_TILE = 512
-local function readAabb(location) return location.aabb end
-local function boundsOf(location, coord)
-    local known, bounds = pcall(readAabb, location)
-    if not known or bounds == nil then return nil end
-    local low, high = bounds.minimum, bounds.maximum
-    if high.x - low.x < 1 or high.y - low.y < 1 or high.z - low.z < 1 then return nil end
-    local originX = coord.x * FINE_UNITS_PER_TILE + FINE_UNITS_PER_TILE / 2
-    local originZ = coord.z * FINE_UNITS_PER_TILE + FINE_UNITS_PER_TILE / 2
-    return { x = low.x - originX, X = high.x - originX, z = low.z - originZ, Z = high.z - originZ,
-        height = high.y - low.y }
+-- Returns a found location's entry: its centre in tiles, its size and shape as placed (width and length turned
+-- with it), whether it is a node's used form, and the box round its model (src/game/model_bounds.lua).
+local function locationEntry(feature, locID, coord, rotation, width, length, shapeType)
+    return {
+        feature = feature, x = coord.x + width / 2, z = coord.z + length / 2, width = width, length = length,
+        shapeType = shapeType, isUsedForm = usedLocIDs[locID] == true,
+        bounds = ModelBounds.of(locID, rotation, width, length),
+    }
 end
 
--- Returns whether two scans' locations by zone hold the same locations.
-local function sameLocationsByZone(before, after)
-    for zoneKey, locations in pairs(after) do
-        local earlier = before[zoneKey]
-        if earlier == nil or #earlier ~= #locations then return false end
-        for index, location in ipairs(locations) do
-            local was = earlier[index]
-            if was.id ~= location.id or was.x ~= location.x or was.z ~= location.z or was.width ~= location.width
-                or was.length ~= location.length or was.rotation ~= location.rotation then
-                return false
-            end
+-- Reads the standing heights of zones not read yet, and returns whether any zone was read.
+-- A zone reads as nothing standing until the client loads its models, which for a far zone waits until the player
+-- comes nearer, so it is retried as the player moves. A zone whose template has nothing standing (open ground) is
+-- never read, as it cannot tell its turn: each read is 128 height calls.
+local function readStanding()
+    local level = Player.GetEntity().coordGrid.level
+    local anyRead = false
+    for _, zone in ipairs(Forest.zones) do
+        local zoneKey = zone.x .. "," .. zone.z
+        if Forest.standingByZone[zoneKey] == nil and ForestGrid.hasStanding(zone.sourceX .. "_" .. zone.sourceZ) then
+            Forest.standingByZone[zoneKey] = StandingHeights.read(level, zone.x, zone.z)
+            anyRead = anyRead or Forest.standingByZone[zoneKey] ~= nil
         end
     end
-    for zoneKey in pairs(before) do
-        if after[zoneKey] == nil then return false end
-    end
-    return true
+    return anyRead
+end
+
+-- Notes every NPC the client holds: the forest's own, and monsters to count.
+local function scanNpcs()
+    for _, npcEntity in ipairs(NPCList.All()) do noteNpc(npcEntity) end
 end
 
 -- Scans every location the client holds. Asking the game for a config's locations, minus hidden ones, finds only
@@ -459,42 +461,29 @@ local function scan()
     -- only a find or a change to one restarts the settling, not a claim or follower noted earlier
     local changedBefore = foundChanged
     foundChanged = false
-    local locationsByZone = {}
     for _, location in ipairs(LocList.All()) do
-        local coord = location.coordGrid
-        local zoneX, zoneZ = coord.x // ZONE_SIZE * ZONE_SIZE, coord.z // ZONE_SIZE * ZONE_SIZE
-        local zoneKey = zoneX .. "," .. zoneZ
-        locationsByZone[zoneKey] = locationsByZone[zoneKey] or {}
-        table.insert(locationsByZone[zoneKey], {
-            id = location.configID, x = coord.x - zoneX, z = coord.z - zoneZ,
-            width = location.width, length = location.length, rotation = location.rotationType,
-        })
         local feature = featureOfLocID[location.configID]
         if feature ~= nil then
+            local coord = location.coordGrid
             local packedCoord = coord:ToPacked()
             local known = locationsFound[packedCoord]
             local isUsedForm = usedLocIDs[location.configID] == true
             if known == nil or known.feature ~= feature or known.isUsedForm ~= isUsedForm then
+                local entry = locationEntry(feature, location.configID, coord, location.rotationType, location.width,
+                    location.length, location.shapeType)
                 -- first seen: fill in its announced entry, so plans and routes keep the same object
-                local entry = announced[packedCoord]
-                if known ~= nil or entry == nil or entry.feature ~= feature then entry = { feature = feature } end
-                entry.x, entry.z = coord.x + location.width / 2, coord.z + location.length / 2
-                entry.width, entry.length = location.width, location.length
-                entry.isUsedForm, entry.bounds = isUsedForm, boundsOf(location, coord)
+                local announcedEntry = announced[packedCoord]
+                if known == nil and announcedEntry ~= nil and announcedEntry.feature == feature then
+                    for field, value in pairs(entry) do announcedEntry[field] = value end
+                    entry = announcedEntry
+                end
                 locationsFound[packedCoord] = entry
                 foundChanged = true
-            elseif known.bounds == nil then
-                -- bounds missing from afar may have loaded
-                known.bounds = boundsOf(location, coord)
-                if known.bounds ~= nil then foundChanged = true end
             end
         end
     end
-    -- The grid is built from the locations by zone, so it is stale only when they differ from the last scan's:
-    -- a scan that loads nothing new (the ticks after a zone change) keeps the grid.
-    if not sameLocationsByZone(Forest.locationsByZone, locationsByZone) then gridStale = true end
-    Forest.locationsByZone = locationsByZone
-    for _, npcEntity in ipairs(NPCList.All()) do noteNpc(npcEntity) end
+    if readStanding() then gridStale = true end
+    scanNpcs()
     if foundChanged then settlingTicksLeft = SETTLING_TICKS end
     foundChanged = foundChanged or changedBefore
 end
@@ -509,48 +498,22 @@ local function locationEntries()
     return entries
 end
 
--- Returns the south-west tile of each location among the entries, leaving out NPCs.
-local function thingTiles(entries)
-    local tiles = {}
-    for _, entry in ipairs(entries) do
-        if not entry.isNpc then
-            local x, z = Forest.southWestOf(entry)
-            tiles[#tiles + 1] = { x = x, z = z }
-        end
-    end
-    return tiles
-end
-
--- Reads the standing heights of zones not read yet. A far zone may not be loaded, so it is retried as the player
--- moves. Returns whether any zone was read.
--- A zone reads as nothing standing both while it is not loaded and when it is open ground, so a zone whose
--- locations are loaded and still reads so is not read again (standingEmpty): each read is 128 height calls.
-local standingEmpty = {}
-local function readStanding()
-    local level = Player.GetEntity().coordGrid.level
-    local anyRead = false
-    for _, zone in ipairs(Forest.zones) do
-        local zoneKey = zone.x .. "," .. zone.z
-        if Forest.standingByZone[zoneKey] == nil and not standingEmpty[zoneKey] then
-            Forest.standingByZone[zoneKey] = StandingHeights.read(level, zone.x, zone.z)
-            if Forest.standingByZone[zoneKey] ~= nil then
-                anyRead = true
-            elseif Forest.locationsByZone[zoneKey] ~= nil then
-                standingEmpty[zoneKey] = true
-            end
-        end
-    end
-    return anyRead
-end
-
--- Builds the forest's grid, keeping the old one if the new one has the same tiles, so routes and plan
--- searches cached on it stay valid.
--- entries: the things found, which show how their zones are turned.
-local function buildGrid(entries)
+-- Builds the forest's grid, keeping the last one built if the new one is the same, so routes and plan searches
+-- cached on it stay valid.
+-- Forest.grid stays nil until a grid is settled (every zone whose turn matters turned by its heights) or
+-- GRID_WAIT_TICKS have passed since entering, so the map's zones, the routes and the plans are not worked out on
+-- the unturned zones of the first ticks, while the zones load.
+local GRID_WAIT_TICKS = 6 -- about four seconds; at Medium draw distance a forest's zones load within three ticks
+local builtGrid = nil -- the last grid built, held back from Forest.grid until settled or due
+local gridDueTick = 0 -- the server tick from which an unsettled grid is used
+local function buildGrid()
     gridStale = false
-    local grid = ForestGrid.build(Forest.zones, Forest.bounds, thingTiles(entries), Forest.standingByZone,
-        Forest.locationsByZone)
-    if not ForestGrid.same(Forest.grid, grid) then Forest.grid = grid end
+    local grid = ForestGrid.build(Forest.zones, Forest.bounds, Forest.standingByZone)
+    if ForestGrid.same(builtGrid, grid) then return end
+    builtGrid, Forest.zoneTurns = grid, grid.turns
+    if grid.settled or Forest.ticks >= gridDueTick then Forest.grid = grid end
+    -- every zone's heights are in, so the draw distance raised to load them can come down
+    if grid.settled then DrawDistance.restore() end
 end
 
 local function publish()
@@ -577,11 +540,10 @@ local function publish()
         end
     end
     Forest.found, Forest.countOf = found, countOf
-    -- Found things show which way their zones are turned, so the grid is rebuilt with them, and with any zones
-    -- read since.
+    -- The grid is rebuilt with its changed inputs, and with any zones' heights read since.
     if gridStale then
         readStanding()
-        buildGrid(found)
+        buildGrid()
     end
     if Forest.onChanged then Forest.onChanged() end
 end
@@ -653,11 +615,11 @@ local function followPlayer()
     if last ~= nil and last.x == x and last.z == z then return end
     Forest.playerTile = { x = x, z = z }
     if Forest.entryTile == nil then Forest.entryTile = Forest.playerTile end
-    -- zones not loaded from the entrance may load from nearer: retry them on each new zone, and scan what loads
+    -- on each new zone: the zones' heights not read yet are tried again, and NPCs nearer looked for
     if last == nil or last.x // ZONE_SIZE ~= x // ZONE_SIZE or last.z // ZONE_SIZE ~= z // ZONE_SIZE then
         zoneScanTicksLeft = ZONE_SCAN_TICKS
         if readStanding() then
-            buildGrid(locationEntries())
+            buildGrid()
             if Forest.onChanged then Forest.onChanged() end
         end
     end
@@ -694,12 +656,12 @@ local function forgetForest()
     Forest.found, Forest.countOf, Forest.doorsGone, Forest.following = {}, {}, {}, {}
     Forest.followingVersion = Forest.followingVersion + 1
     Forest.keysHeldBefore, Forest.keysUsedAt = {}, {}
-    Forest.standingByZone, Forest.locationsByZone = {}, {}
-    Forest.grid = nil -- built by the publish after the first scan on entering
+    Forest.standingByZone = {}
+    Forest.grid, builtGrid, Forest.zoneTurns = nil, nil, nil -- built by the publish after the first scan on entering
     Forest.playerTile, Forest.entryTile = nil, nil
     Forest.monstersSpawned = 0
     locationsFound, npcsFound, monstersSeen, taskItemsHeld, itemsHeldNow = {}, {}, {}, {}, nil
-    npcsWaiting, standingEmpty, searchEnded = {}, {}, false
+    npcsWaiting, searchEnded = {}, false
 end
 
 local function stopWatching()
@@ -709,8 +671,6 @@ local function stopWatching()
     Event.LocRemoved.Unsubscribe(SUBSCRIPTION)
     Event.NPCEntityAdded.Unsubscribe(SUBSCRIPTION)
     Event.InventoryUpdated.Unsubscribe(SUBSCRIPTION)
-    Event.RegionUpdated.Unsubscribe(SUBSCRIPTION)
-    Event.WorldUpdated.Unsubscribe(SUBSCRIPTION)
     announced = {}
     DrawDistance.restore()
     if Forest.isInside then
@@ -721,66 +681,53 @@ local function stopWatching()
     end
 end
 
--- Drops what was found on a changed tile, as it may be gone, like an opened barrier; the next scan
--- restores whatever is still there.
-local function onLocationChanged(event)
-    local packedCoord = event.coordGrid:ToPacked()
-    if locationsFound[packedCoord] ~= nil then
-        locationsFound[packedCoord] = nil
-        foundChanged, gridStale = true, true
+-- Drops what was announced or found on a tile with the given shape: the location is gone, or another has replaced
+-- it, like a door's remains (DOOR*_OPEN, _CUT, _ONFIRE) or the statues removed. The events alone tell, so nothing is
+-- scanned again.
+local function dropAt(packedCoord, shapeType)
+    local announcedEntry, known = announced[packedCoord], locationsFound[packedCoord]
+    if announcedEntry ~= nil and announcedEntry.shapeType == shapeType then
+        announced[packedCoord] = nil
+        foundChanged = true
     end
-    settlingTicksLeft = SETTLING_TICKS
+    if known ~= nil and known.shapeType == shapeType then
+        locationsFound[packedCoord] = nil
+        foundChanged = true
+    end
 end
 
--- Notes a feature added, which counts as found from the event alone (see `announced`).
--- Another location of the same shape on its tile replaces it, as a barrier's remains do.
+-- Notes a feature added, which counts as found from the event alone (see `announced`); a location found there
+-- takes its form, staying the same object. Any other location added replaces one of the same shape on its tile.
 -- During the first burst, features count toward the announcement.
 local function onLocationAdded(event)
     local config, coord = event.config, event.coordGrid
     local packedCoord = coord:ToPacked()
     local feature = featureOfLocID[config.id] or featureAddedAs[config.id]
-    if feature ~= nil then
-        local width, length = config.width, config.length
-        -- a config's size is unrotated; a quarter turn swaps it
-        if event.rotationType % 2 == 1 then width, length = length, width end
-        announced[packedCoord] = {
-            feature = feature, x = coord.x + width / 2, z = coord.z + length / 2, width = width, length = length,
-            isUsedForm = usedLocIDs[config.id] == true, shapeType = event.shapeType,
-        }
-        foundChanged, gridStale = true, true
-        if announcingTicksLeft > 0 and not announcementsEnded then
-            announcedInBurst, announcedSinceTick = announcedInBurst + 1, announcedSinceTick + 1
-        end
-    elseif announced[packedCoord] ~= nil and announced[packedCoord].shapeType == event.shapeType then
-        announced[packedCoord] = nil
-        foundChanged, gridStale = true, true
+    if feature == nil then return dropAt(packedCoord, event.shapeType) end
+    local width, length = config.width, config.length
+    -- a config's size is unrotated; a quarter turn swaps it
+    if event.rotationType % 2 == 1 then width, length = length, width end
+    local entry = locationEntry(feature, config.id, coord, event.rotationType, width, length, event.shapeType)
+    announced[packedCoord] = entry
+    local known = locationsFound[packedCoord]
+    if known ~= nil then
+        for field, value in pairs(entry) do known[field] = value end
     end
-    if Forest.isInside then onLocationChanged(event) end
+    foundChanged = true
+    if announcingTicksLeft > 0 and not announcementsEnded then
+        announcedInBurst, announcedSinceTick = announcedInBurst + 1, announcedSinceTick + 1
+    end
 end
 
 local function onLocationRemoved(event)
-    local packedCoord = event.coordGrid:ToPacked()
-    if announced[packedCoord] ~= nil then
-        announced[packedCoord] = nil
-        foundChanged, gridStale = true, true
-    end
-    if Forest.isInside then onLocationChanged(event) end
-end
-
--- Reads the region again when it changes; the grid is rebuilt on the next publish.
-local function onRegionUpdated()
-    local region = readRegion()
-    if region ~= nil then
-        Forest.zones, Forest.bounds, Forest.openings = region.zones, region.bounds, region.openings
-        foundChanged, gridStale = true, true
-    end
-    settlingTicksLeft = SETTLING_TICKS
+    dropAt(event.coordGrid:ToPacked(), event.shapeType)
 end
 
 local function enter(region)
     stopExpiry()
     forgetForest()
     Forest.isInside = true
+    gridDueTick = Forest.ticks + GRID_WAIT_TICKS
     Forest.zones, Forest.bounds, Forest.openings = region.zones, region.bounds, region.openings
     foundChanged, gridStale, settlingTicksLeft = true, true, SETTLING_TICKS
     Event.NPCEntityAdded.Subscribe(SUBSCRIPTION, function(event) noteNpc(event.npcEntity) end)
@@ -799,8 +746,6 @@ local function enter(region)
             end
         end
     end)
-    Event.RegionUpdated.Subscribe(SUBSCRIPTION, onRegionUpdated)
-    Event.WorldUpdated.Subscribe(SUBSCRIPTION, function() settlingTicksLeft = SETTLING_TICKS end)
     for task in pairs(doneItemOf) do taskItemsHeld[task] = holdsDoneItem(task) end
     -- a node claimed: the server sends the variable, and the node is republished as used
     readClaimed()
@@ -812,8 +757,9 @@ local function enter(region)
         -- a task taken or finished in the forest
         if event.var.id == currentQuestBaseID then foundChanged = true end
     end)
-    -- At Low draw distance the server announces only nearby map squares; raised to Medium, it sends the rest a
-    -- tick later. Wait for that as a second announcement; quiet ticks end the search if none comes.
+    -- The draw distance goes up to High until the grid settles (draw_distance.lua). Only from Low does the server then
+    -- send more (the far map squares, a tick later): that is waited for as a second announcement, and quiet ticks end
+    -- the search if none comes. From Medium the server has sent the whole forest already, so nothing is waited for.
     if DrawDistance.raise() then
         announcedInBurst, announcedSinceTick, announcementsEnded = 0, 0, false
         announcingTicksLeft = ANNOUNCING_TICKS
@@ -872,10 +818,14 @@ local function onServerTick()
         end
         enter(readRegion())
     end
-    if settlingTicksLeft > 0 or zoneScanTicksLeft > 0 then
-        settlingTicksLeft = math.max(0, settlingTicksLeft - 1)
-        zoneScanTicksLeft = math.max(0, zoneScanTicksLeft - 1)
+    -- Everything is scanned while the forest settles; after that a new zone is looked over for NPCs only, as the
+    -- locations' changes come as events.
+    if settlingTicksLeft > 0 then
+        settlingTicksLeft = settlingTicksLeft - 1
         scan()
+    elseif zoneScanTicksLeft > 0 then
+        zoneScanTicksLeft = zoneScanTicksLeft - 1
+        scanNpcs()
     end
     local wasSearching = Forest.isSearching
     -- Done once the announcement is complete; otherwise after a few quiet ticks since the last find.
@@ -887,6 +837,10 @@ local function onServerTick()
     readDialogue()
     noteWaitingNpcs()
     followNpcs()
+    -- An unsettled grid held back is used once due, as a zone may never load (a draw distance below Medium).
+    if Forest.grid == nil and builtGrid ~= nil and Forest.ticks >= gridDueTick then
+        Forest.grid, foundChanged = builtGrid, true
+    end
     if foundChanged then publish() end
     followPlayer()
 end

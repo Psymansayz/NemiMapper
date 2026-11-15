@@ -215,4 +215,21 @@ function Routes.routeTo(grid, from, targetTiles, blocked)
     return Routes.routeFrom(search(grid, { from }, blocked), grid, targetTiles, blocked)
 end
 
+-- Returns the route from the tile from toward the grid's centre, which is the forest's, avoiding the tiles in
+-- blocked: to the reachable tile nearest the centre (the lowest index of those as near), or nil if none is.
+function Routes.routeTowardCentre(grid, from, blocked)
+    local found = search(grid, { from }, blocked)
+    local centreX, centreZ = grid.minX + grid.width / 2, grid.minZ + grid.length / 2
+    local bestIndex, bestDistance = nil, nil
+    for index in pairs(found.distance) do
+        local x, z = grid:tile(index)
+        local distance = (x + 0.5 - centreX) ^ 2 + (z + 0.5 - centreZ) ^ 2
+        if bestDistance == nil or distance < bestDistance or (distance == bestDistance and index < bestIndex) then
+            bestIndex, bestDistance = index, distance
+        end
+    end
+    if bestIndex == nil then return nil end
+    return straightPieces(wayBack(found, bestIndex))
+end
+
 return Routes

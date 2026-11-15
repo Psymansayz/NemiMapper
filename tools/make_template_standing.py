@@ -1,5 +1,5 @@
 """Writes src/data/template_standing.lua and src/data/zone_walkability.lua from a console paste holding the
-probe's TEMPLATEHEIGHT| lines. Press the page button "Debug: log the template square" standing near the middle of
+probe's TEMPLATEHEIGHT| and TEMPLATELOC| lines. Press the page button "Debug: log the template square" standing near the middle of
 map square 65,10, since the client drops small scenery far from the player.
 
     python tools/make_template_standing.py <the paste>
@@ -14,6 +14,9 @@ import re
 import sys
 
 ZONE = 8
+# The opening zone, at the middle of the entrance and the exit: all ground, the one zone a forest uses with nothing
+# standing. The square's other zones with nothing standing are blank (no ground texture), unused by the game.
+OPENING = "4200_664"
 # Tiles found blocked in game though the height reading sees nothing standing on them: template zone -> (x, z)
 # within it, from its south-west corner.
 BLOCKED = {
@@ -25,6 +28,15 @@ BLOCKED = {
 
 paste = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
 zones = {}
+# Node spots: a node or rocks stand on each in every forest, so it is never walkable, though the heights show
+# nothing there. TEMPLATELOC|zone x,z||id|config|x,z within the zone|size|shape|rotation
+hotspots = {}
+for line in paste.splitlines():
+    found = re.search(r"TEMPLATELOC\|(\d+),(\d+)\|\|\d+\|RAID1_FOREST_HOTSPOT\|(\d+),(\d+)\|", line)
+    if found:
+        hotspots.setdefault(f"{found.group(1)}_{found.group(2)}", []).append((int(found.group(3)), int(found.group(4))))
+if not hotspots:
+    sys.exit("no TEMPLATELOC| line names a RAID1_FOREST_HOTSPOT: the paste lacks the template's locations")
 for line in paste.splitlines():
     found = re.search(r"TEMPLATEHEIGHT\|(\d+),(\d+)\|\|([\d -]+)\|([\d -]+)", line)
     if found:
@@ -58,27 +70,28 @@ for zone in ordered:
 standing_lines.append("}")
 (data_folder / "template_standing.lua").write_bytes(("\r\n".join(standing_lines) + "\r\n").encode("utf-8"))
 
-OPEN_ROWS = ", ".join(['"' + "." * ZONE + '"'] * ZONE)
 walkability_lines = [
     "-- Which tiles of each zone the forest is built of can be walked on: those with nothing standing on them in",
     "-- the map square they are copied from (template_standing.lua). A zone is named by the tile of its south-west",
     "-- corner in that map square. Its rows run north to south and west to east, \".\" for ground and \"#\" for a",
-    "-- tree, a plant or a tile found blocked in game (BLOCKED in the tool). Zones that are all ground share one",
-    "-- table. Made by tools/make_template_standing.py: run it again instead of editing.",
-    "",
-    f"local OPEN = {{ {OPEN_ROWS} }}",
+    "-- tree, a plant, a node spot (RAID1_FOREST_HOTSPOT: a node or rocks stand there in every forest) or a tile found",
+    "-- blocked in game (BLOCKED in the tool). Only the zones a forest uses are listed: those with something standing,",
+    "-- and the opening, all ground. The square's other zones are blank, unused by the game.",
+    "-- Made by tools/make_template_standing.py: run it again instead of editing.",
     "",
     "return {",
 ]
 for zone in ordered:
+    if not any(zones[zone]) and zone != OPENING:
+        continue
     rows = []
     for row in reversed(range(ZONE)):
         values = zones[zone][row * ZONE:(row + 1) * ZONE]
-        blocked = BLOCKED.get(zone, [])
+        blocked = BLOCKED.get(zone, []) + hotspots.get(zone, [])
         rows.append('"' + "".join("." if value == 0 and (x, row) not in blocked else "#"
                                   for x, value in enumerate(values)) + '"')
     rows = ", ".join(rows)
-    walkability_lines.append(f'    ["{zone}"] = OPEN,' if rows == OPEN_ROWS else f'    ["{zone}"] = {{ {rows} }},')
+    walkability_lines.append(f'    ["{zone}"] = {{ {rows} }},')
 walkability_lines.append("}")
 (data_folder / "zone_walkability.lua").write_bytes(("\r\n".join(walkability_lines) + "\r\n").encode("utf-8"))
 

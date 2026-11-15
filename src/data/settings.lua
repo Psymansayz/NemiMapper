@@ -32,7 +32,7 @@ local SWITCHES = {
     -- Routes on the map
     { "hideFinalRoute", false },      -- no route from the entrance past every node to the exit
     { "hideActiveRoute", false },     -- do not draw the chosen route on the map
-    { "alwaysShowTarget", true },     -- the chosen route's target keeps its icon even when another setting hides it
+    { "alwaysShowTarget", true },     -- the chosen route's stops keep their icons even when another setting hides them
     -- Game world
     { "hideRouteInWorld", false },    -- do not draw the chosen route on the ground
     { "hideTargetBeam", false },      -- no beam of light over the chosen route's target
@@ -42,7 +42,7 @@ local SWITCHES = {
     { "highlightTasks", true },       --   ...the current task's target (the Traitor or the Pahtli plant)
     { "highlightPuzzles", true },     --   ...the keys and doors on the way to a node, until the door opens
     { "highlightUnneededPuzzles", false }, --   ...and the others too
-    { "highlightTarget", true },      --   ...the chosen route's target
+    { "highlightTarget", true },      --   ...the chosen route's stops
     -- Scouting
     { "flashOnFullForest", false },   -- flash the screen green for 5 s on a 9/9 forest
     { "blockOnFullForest", false },   -- block game clicks on a 9/9 forest for 5 s or until dismissed

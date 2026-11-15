@@ -94,6 +94,16 @@ function ForestStops.stopOf(kind, entry, colour)
     return stop
 end
 
+-- Returns the stop of entry among stops if a plan may keep going to it, or nil to plan afresh.
+-- A door whose key is not held (its needs) is not kept, so the plan fetches the key first.
+function ForestStops.keptStop(stops, entry)
+    if entry == nil then return nil end
+    for _, stop in ipairs(stops) do
+        if stop.entry == entry and stop.needs == nil then return stop end
+    end
+    return nil
+end
+
 -- Returns the mapping plan's stops: every found node not claimed today, and the active task's target (the same trip).
 function ForestStops.mapStops()
     local stops = {}

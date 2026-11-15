@@ -45,6 +45,7 @@ local ROUTE_BUILD_SUBSCRIPTION = "nemi_mapper_route_build"
 local shown = {}
 local tracked = {} -- entity name -> NPC highlight, followed on logic ticks
 local beamTarget = nil -- the chosen route's target, or nil for no beam
+local routeStops = {} -- the chosen route's stops (entry -> true), boxed by their setting
 local NONE = {}
 -- "<kind>:<size key>" -> ShapeData, whose origin is the middle of the thing's south-west tile.
 -- Emptied when the transparency changes, as every shape is then remade.
@@ -207,14 +208,14 @@ local function shapeFor(kind, entry, sizeKey)
 end
 
 -- Returns whether the settings give a thing a box.
--- The chosen route's target always gets one when its switch is on.
+-- The chosen route's stops always get one when their switch is on.
 -- held is the set of tools held, by source key.
 local function boxWanted(entry, held, unneeded)
     if not Settings.highlightInWorld then return false end
     local feature = entry.feature
     -- a key held or a puzzle solved is never highlighted, even as the route's target
     if feature.isPuzzle and not ForestStops.isPuzzleLeft(entry, held) then return false end
-    if beamTarget == entry and Settings.highlightTarget then return true end
+    if (routeStops[entry] or beamTarget == entry) and Settings.highlightTarget then return true end
     if feature.kind == "node" then
         return Settings.highlightNodes and (not entry.isUsed or Settings.highlightUsedNodes)
     end
@@ -496,15 +497,7 @@ function Highlights.refresh(held)
     end
 end
 
--- Sets the chosen route's target (a found entry), or nil for no route or the final route.
-function Highlights.beamOn(entry)
-    if beamTarget == entry then return end
-    beamTarget = entry
-    Highlights.refresh()
-end
-
-local heldShown = {} -- the tools held at the last refresh from a step or an inventory change, by source key
-
+-- Returns whether two sets (key -> anything) hold the same keys.
 local function sameKeys(first, second)
     for key in pairs(first) do
         if second[key] == nil then return false end
@@ -514,6 +507,17 @@ local function sameKeys(first, second)
     end
     return true
 end
+
+-- Sets the chosen route's target (a found entry, which gets the beam) and its stops (entry -> true, which get boxes),
+-- or nil for no route or the final route.
+function Highlights.beamOn(entry, stops)
+    stops = stops or NONE
+    if beamTarget == entry and sameKeys(routeStops, stops) then return end
+    beamTarget, routeStops = entry, stops
+    Highlights.refresh()
+end
+
+local heldShown = {} -- the tools held at the last refresh from a step or an inventory change, by source key
 
 -- Called on each player step and inventory change; refreshes only when the tools held have changed.
 function Highlights.followPlayer()

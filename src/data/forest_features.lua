@@ -2,7 +2,7 @@
 --
 --   key        the feature's icon (resources/<key>.png) and its entry in src/data/icon_sizes.lua
 --   locations  the locations that are this feature
---   npcs       the NPCs that are this feature
+--   npcs       the NPCs that are this feature; a forest has one of each at most (forest.lua relies on it)
 --   addedAs    the location the server adds when it is not one of `locations`. It is a MultiLoc that the client
 --              shows as one of them by a variable, and identifies the feature before the client resolves it.
 --   skill      the skill a node trains, which picks its legend icon (HITMARK_ICON_SKILL_<SKILL>)
