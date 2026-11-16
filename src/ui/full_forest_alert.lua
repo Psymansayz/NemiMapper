@@ -85,7 +85,8 @@ end
 
 -- Returns whether the forest should trigger the alert
 function FullForestAlert.forestIsComplete(kinds, missedKinds)
-    if not Settings.alertOnNeededNodes then return kinds >= KINDS_FOR_ALERT end
+    if kinds >= KINDS_FOR_ALERT then return true end
+    if not Settings.alertOnNeededNodes then return false end
     local needed = 0
     for _, node in ipairs(ForestFeatures.nodes) do
         if not Forest.isNodeClaimed(node.key) then
