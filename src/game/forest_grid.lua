@@ -1,8 +1,6 @@
 -- The forest's walkable tiles: each zone's walkable tiles from its template, turned the way the game turned the
--- zone. The game does not say how it turned a zone, but the zone's standing heights (trees, plants) are the
--- template's turned the same way, so matching them gives the turn. A zone whose heights cannot tell yet (not
--- loaded) stays unturned until they can, and a grid with such a zone is not settled. Every node spot is blocked
--- in the data, as a node or rocks stand on it in every forest.
+-- zone. The game does not say how it turned a zone, so the zones' standing heights are compared against the
+-- template's to determine how it was rotated.
 
 local ZoneWalkability = require("src/data/zone_walkability")
 local TemplateStanding = require("src/data/template_standing")
@@ -37,11 +35,12 @@ local function turnedTiles(values, quarterTurns)
     return values
 end
 
--- Cache of each template zone's standing heights in every turn: "x_z" -> [quarter turns] -> heights.
+-- Cache of each template zone's standing heights when turned: "x_z" -> [quarter turns] -> heights.
+-- turnedTemplate's cache is dropped five minutes after leaving a forest to free up memory.
 local turnedTemplateStanding = {}
 
 -- Returns the clockwise quarter turns that best match the template zone sourceKey's standing heights to
--- standing, or nil if none does.
+-- standing; none when two turns match equally well.
 -- The forest replaces a few tiles (nodes, barriers) and a zone read from afar lacks small plants, but the turn with the
 -- most matching tiles still stands out.
 local function turnByStanding(sourceKey, standing)
@@ -65,9 +64,7 @@ local function turnByStanding(sourceKey, standing)
     return not tied and bestTurns or nil
 end
 
--- Returns the template zone sourceKey's ground flags, indexed as in turnedTiles, from the data's text rows (north to
--- south, west to east, "." for ground), or nil if the data lacks the zone.
--- The rows are kept, as turnedTemplate's cache of the result expires between forests.
+-- Returns the template zone sourceKey's ground flags, indexed as in turnedTiles, from the data's text rows.
 local function groundTiles(sourceKey)
     local rows, tiles = ZoneWalkability[sourceKey], {}
     for z = 0, ZONE_SIZE - 1 do
@@ -147,7 +144,7 @@ function ForestGrid.same(first, second)
     return true
 end
 
--- Returns a tile's index in the grid, or nil outside it.
+-- Returns a tile's index in the grid.
 function Grid:index(x, z)
     if x < self.minX or z < self.minZ or x >= self.minX + self.width or z >= self.minZ + self.length then return nil end
     return (z - self.minZ) * self.width + (x - self.minX) + 1

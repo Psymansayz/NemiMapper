@@ -23,8 +23,7 @@
 --   TEMPLATEHEIGHT| the HEIGHT data for the template square; the source of src/data/template_standing.lua
 --              and zone_walkability.lua (tools/make_template_standing.py)
 -- Logged as they happen: EVENT| for region and world events; CHANGE| for each change to what the plugin found,
--- with ticks since the region was created (ForestProbe.logChange); WALK| (ForestProbe.noteStep); and NPC|
--- (ForestProbe.watchNpcs, below).
+-- with ticks since the region was created (ForestProbe.logChange); and WALK| (ForestProbe.noteStep).
 -- ForestProbe.logInterfaceComponents() logs what the open interfaces hold that the map could use:
 --   UICOMPONENT| each static component whose name (id.Component) contains MINIMAP, COMPASS or WORLD, with its
 --                sprite if it has one
@@ -53,8 +52,8 @@ local function log(tag, text)
     print(LOG_PREFIX .. tag .. "|" .. text)
 end
 
--- Returns getValue(), or nil if it fails.
--- The probe asks for things that may not exist, hence pcall.
+-- Returns getValue() as text, or "?" if it fails.
+-- The probe asks for fields and names that may not exist, hence pcall.
 local function read(getValue)
     local succeeded, value = pcall(getValue)
     return succeeded and tostring(value) or "?"
@@ -370,156 +369,7 @@ function ForestProbe.logChange()
         .. "|missed=" .. #Forest.nodesMissedByRotation())
 end
 
--- Does NPCEntityAdded fire for every NPC that comes into view? If so, the forest's full NPC scan could run once
--- on entering and the event cover the rest.
--- Each server tick in the forest compares the NPC list with the events, by entity uid:
---   NPC|miss|tick|uid|id|name|tile|player|why   a listed NPC with no event: "new" (not listed on entering) or
---                                                "back" (in view again, no event since it left)
---   NPC|late|tick|uid|ticks                      the event came this many ticks after the NPC was listed
---   NPC|back|tick|uid|id|ticks gone              an NPC back in view whose event fired again
---   NPC|nouid|tick|id|name|tile|valid=           an event whose entity had no uid yet; it is matched to the next
---                                                listed NPC of its kind within NOUID_MATCH_TILES
---   NPC|matched|tick|uid|ticks                   such an event matched to a listed NPC, this many ticks later
---   NPC|summary|...                              the counts, on leaving. neverTold=0 means the scan can run on
---                                                entering alone.
-local NPC_SUBSCRIPTION = "nemi_mapper_probe_npcs"
-local npcWatch = nil -- while in the forest: { byUid, counts, uidless = [n] { id, x, z, tick } }
-local NOUID_MATCH_TILES = 3
-
-local function npcText(npcEntity)
-    local player = Forest.playerTile
-    return npcEntity.uid .. "|" .. npcEntity.configID .. "|" .. read(function() return npcEntity.config.configName end)
-        .. "|" .. tile(npcEntity.coordGrid) .. "|player=" .. (player and tile(player) or "?")
-end
-
-local function noteNpcEvent(event)
-    local npcEntity = event.npcEntity
-    local counts = npcWatch.counts
-    counts.events = counts.events + 1
-    if npcEntity.uid == nil then
-        counts.uidless = counts.uidless + 1
-        -- An entity given with no uid may have no tile either (seen in game).
-        local coord = npcEntity.coordGrid
-        if coord ~= nil then
-            npcWatch.uidless[#npcWatch.uidless + 1] = { id = npcEntity.configID, x = coord.x, z = coord.z,
-                tick = Forest.ticks }
-        end
-        log("NPC", "nouid|" .. Forest.ticks .. "|" .. tostring(npcEntity.configID) .. "|"
-            .. read(function() return npcEntity.config.configName end) .. "|" .. tile(coord)
-            .. "|valid=" .. read(function() return npcEntity.isValid end))
-        return
-    end
-    local record = npcWatch.byUid[npcEntity.uid]
-    if record == nil then
-        record = {}
-        npcWatch.byUid[npcEntity.uid] = record
-    end
-    record.eventTick = Forest.ticks
-    if record.missedAt ~= nil then
-        counts.late = counts.late + 1
-        log("NPC", "late|" .. Forest.ticks .. "|" .. npcEntity.uid .. "|" .. (Forest.ticks - record.missedAt))
-        record.missedAt = nil
-    end
-end
-
-local function compareNpcList()
-    local counts, byUid, listed = npcWatch.counts, npcWatch.byUid, {}
-    for _, npcEntity in ipairs(NPCList.All()) do
-        local uid = npcEntity.uid
-        listed[uid] = true
-        local record = byUid[uid]
-        if record == nil then
-            record = {}
-            byUid[uid] = record
-        end
-        if not record.inList then
-            record.inList = true
-            counts.seen = counts.seen + 1
-            local isBack = record.goneTick ~= nil
-            local told = record.eventTick ~= nil and (not isBack or record.eventTick >= record.goneTick)
-            -- A uid-less event of this kind nearby is taken as this NPC's.
-            if not told then
-                local coord = npcEntity.coordGrid
-                for index, event in ipairs(npcWatch.uidless) do
-                    if event.id == npcEntity.configID and math.abs(event.x - coord.x) <= NOUID_MATCH_TILES
-                        and math.abs(event.z - coord.z) <= NOUID_MATCH_TILES then
-                        told = true
-                        record.eventTick = event.tick
-                        table.remove(npcWatch.uidless, index)
-                        log("NPC", "matched|" .. Forest.ticks .. "|" .. uid .. "|" .. (Forest.ticks - event.tick))
-                        break
-                    end
-                end
-            end
-            if isBack then counts.back = counts.back + 1 end
-            if told then
-                if isBack then
-                    log("NPC", "back|" .. Forest.ticks .. "|" .. uid .. "|" .. npcEntity.configID .. "|"
-                        .. (Forest.ticks - record.goneTick) .. " gone")
-                end
-            else
-                counts.missed = counts.missed + 1
-                record.missedAt = Forest.ticks
-                log("NPC", "miss|" .. Forest.ticks .. "|" .. npcText(npcEntity) .. "|" .. (isBack and "back" or "new"))
-            end
-        end
-    end
-    for uid, record in pairs(byUid) do
-        if record.inList and not listed[uid] then
-            record.inList, record.goneTick = false, Forest.ticks
-        end
-    end
-end
-
--- Called on entering the forest (main.lua). NPCs already listed are the baseline: no event is expected for them.
-function ForestProbe.watchNpcs()
-    npcWatch = { byUid = {}, uidless = {},
-        counts = { events = 0, uidless = 0, seen = 0, atEntry = 0, missed = 0, late = 0, back = 0 } }
-    for _, npcEntity in ipairs(NPCList.All()) do
-        npcWatch.byUid[npcEntity.uid] = { inList = true }
-        npcWatch.counts.atEntry = npcWatch.counts.atEntry + 1
-    end
-    Event.NPCEntityAdded.Subscribe(NPC_SUBSCRIPTION, noteNpcEvent)
-    Event.ServerLogic.Subscribe(NPC_SUBSCRIPTION, compareNpcList)
-end
-
--- Called on leaving (main.lua): logs the summary and unsubscribes.
-function ForestProbe.stopWatchingNpcs()
-    if npcWatch == nil then return end
-    Event.NPCEntityAdded.Unsubscribe(NPC_SUBSCRIPTION)
-    Event.ServerLogic.Unsubscribe(NPC_SUBSCRIPTION)
-    local counts, unanswered = npcWatch.counts, 0
-    for _, record in pairs(npcWatch.byUid) do
-        if record.missedAt ~= nil then unanswered = unanswered + 1 end
-    end
-    log("NPC", "summary|events=" .. counts.events .. "|uidless=" .. counts.uidless .. "|atEntry=" .. counts.atEntry
-        .. "|seen=" .. counts.seen
-        .. "|back=" .. counts.back .. "|missed=" .. counts.missed .. "|late=" .. counts.late
-        .. "|neverTold=" .. unanswered)
-    npcWatch = nil
-end
-
--- TEMPORARY: logs Trinks' task variables on every change. Which part each task counts is known now; Clear
--- Rocks' target (10 by the wiki) is still to be seen, as is any use of the progress VarBit (0 so far).
-local TASK_VARIABLES = {
-    "RAID1_GOEBIE_CURRENT_QUEST", "RAID1_GOEBIE_CURRENT_QUEST_PROGRESS", "RAID1_GOEBIE_NPC_SUBTASK",
-    "RAID1_GOEBIE_LOC_SUBTASK", "RAID1_GOEBIE_OBJ_SUBTASK", "RAID1_GOEBIE_QUESTS_COMPLETE_TODAY",
-}
-local taskVariables = {}
-for _, name in ipairs(TASK_VARIABLES) do taskVariables[name] = GameIds.playerVariable(name) end
-local function logTaskVariables(event)
-    local quest = taskVariables.RAID1_GOEBIE_CURRENT_QUEST
-    if quest == nil or quest.baseVar == nil or event.var.id ~= quest.baseVar.id then return end
-    local values = {}
-    for _, name in ipairs(TASK_VARIABLES) do
-        local variable = taskVariables[name]
-        values[#values + 1] = name:gsub("RAID1_GOEBIE_", ""):lower() .. "=" .. tostring(variable and variable.value)
-    end
-    log("TASKVARS", table.concat(values, "|") .. "|base=" .. event.oldValue .. "->" .. event.newValue)
-end
-
 function ForestProbe.start()
-    Event.VarTransmit.Subscribe(SUBSCRIPTION, logTaskVariables)
     Event.RegionCreated.Subscribe(SUBSCRIPTION, function(event)
         regionCreatedAt = Forest.ticks
         log("EVENT", "RegionCreated|squares=" .. event.mapSquareMinX .. "," .. event.mapSquareMinZ .. ".."
@@ -533,10 +383,8 @@ function ForestProbe.start()
 end
 
 function ForestProbe.stop()
-    Event.VarTransmit.Unsubscribe(SUBSCRIPTION)
     Event.RegionCreated.Unsubscribe(SUBSCRIPTION)
     Event.WorldCreated.Unsubscribe(SUBSCRIPTION)
-    ForestProbe.stopWatchingNpcs()
 end
 
 return ForestProbe

@@ -1,7 +1,4 @@
--- The button on the map window's title bar that turns map sharing mode on and off, drawn with the game's chat
--- filter icon and dim while the mode is off. PrettyUI's title drag strip would take its clicks inside the window, so
--- the button sits beside the window in the plugin layer, and PrettyUI keeps it over the title bar as an overlay
--- (placed again after a drag, shown and hidden with the window).
+-- The button on the map window's title bar that turns map sharing mode on and off
 
 local GameIds = require("src/game/game_ids")
 local Settings = require("src/data/settings")
@@ -23,13 +20,10 @@ local function raise()
     raised = nil
 end
 
--- Adds the button beside a PrettyUI window, or returns nil if the game lacks the icon.
--- isShown says whether the window is shown, and onToggle is called on a click.
 function SharingButton.add(window, pluginLayer, isShown, onToggle)
     if SPRITE == nil then return nil end
     local sprite = ui.Sprite.new(pluginLayer)
     sprite.spriteID = SPRITE
-    -- A plugin's component takes no clicks until enabled, as well as not clickthrough.
     sprite.clickthrough = false
     sprite.enabled = true
     sprite:SetSize(SIZE, SIZE)
@@ -49,13 +43,12 @@ function SharingButton.add(window, pluginLayer, isShown, onToggle)
     end
     window:_RegisterOverlay(sprite, isShown, place)
     place()
-    -- A title click raises the drag strip over the overlay.
-    -- PrettyUI's click handler turns the resize handle off first, so a one-frame raise of the button is hooked on that.
     if window.resize ~= nil then
         local setEnabled = window.resize.SetEnabled
         window.resize.SetEnabled = function(resize, enabled)
             setEnabled(resize, enabled)
             if not enabled then
+                if sprite.hidden ~= true then sprite.hidden = true end
                 raised = button
                 Event.Draw.Subscribe(RAISE_SUBSCRIPTION, raise)
             end
@@ -73,7 +66,6 @@ function SharingButton:show()
     end
 end
 
--- Hides the button with the window, which PrettyUI shows again with it.
 function SharingButton:hide()
     self.sprite.hidden = true
 end

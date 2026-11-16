@@ -1,5 +1,4 @@
--- A text whose content and colour are written only when they change, as each write to a component costs the client.
--- The game's components take no fields of the plugin's own, so the values last written are kept beside the component.
+-- Saves a text's content and color.
 
 local StatusText = {}
 

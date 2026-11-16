@@ -1,8 +1,8 @@
 -- The alert when a forest has every node kind (9/9 in the scout window) or, by its setting, every kind still
--- unclaimed today, given once per forest entry if the scouting settings ask for it. The screen flashes green for
--- ALERT_SECONDS, a second on and a second off, through a see-through rectangle that lets clicks pass. For as long,
--- or until the scout window's button ends the alert, a nearly invisible rectangle takes the mouse's clicks, with
--- the scout window raised above it. The keyboard cannot be blocked. Logic is listened to only while either lasts.
+-- unclaimed today, given once per forest entry. 
+-- The screen flashes green for ALERT_SECONDS, a second on and a second off, through a transparent rectangle
+-- A nearly invisible rectangle takes the mouse's clicks, with the scout window raised above it.
+-- Alerts can end early via a button on the scout window.
 
 local ForestFeatures = require("src/data/forest_features")
 local Forest = require("src/game/forest")
@@ -83,10 +83,7 @@ local function onLogicTick()
     if flash ~= nil and ticks % flashTicks == 0 then flash.hidden = ticks // flashTicks % 2 == 1 end
 end
 
--- Returns whether the forest is complete for the alert, which means every node kind (9/9) or, by its setting, every
--- kind the player has not claimed today, of which there must be at least one.
--- kinds and missedKinds are the scout counts (Forest.scoutCounts), which the caller has.
--- The count can grow past the target in one change, so the 9/9 check is "at least", not "exactly".
+-- Returns whether the forest should trigger the alert
 function FullForestAlert.forestIsComplete(kinds, missedKinds)
     if not Settings.alertOnNeededNodes then return kinds >= KINDS_FOR_ALERT end
     local needed = 0

@@ -17,7 +17,7 @@ local function lookUpPlayerVariable(name)
     return var.VarPlayer[name]
 end
 
--- Returns the named player variable (a VarType, read via .value), or nil if unknown.
+-- Returns the named player variable (a VarType, read via .value).
 function GameIds.playerVariable(name)
     local found, variable = pcall(lookUpPlayerVariable, name)
     if not found or variable == nil then
@@ -27,7 +27,7 @@ function GameIds.playerVariable(name)
     return variable
 end
 
--- Returns the id of a config's name, or nil if the name is unknown.
+-- Returns the id of a config's name.
 function GameIds.resolve(kind, name)
     -- The game's id table gives -1 for an unknown name.
     local found, value = pcall(lookUp, kind, name)

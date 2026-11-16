@@ -8,9 +8,8 @@
 --   skill      the skill a node trains, which picks its legend icon (HITMARK_ICON_SKILL_<SKILL>)
 --   toolItem   the tool's item name (id.Obj)
 --   followMessages snippets of the info box or dialogue text shown when an NPC tool follows the player; any one
---              matches. Without them, an NPC tool next to the player counts as following.
---   followsOnTalk  the NPC tool follows whoever talks to it, so its name heading a dialogue line, while it is beside
---              the player, counts as following too
+--              matches
+--   refusals   Lua patterns of the text shown when an NPC tool follows another player, capturing that player's name
 --   claimed    the VarBit (var.VarPlayer) set once the node's XP is claimed today
 --   colour     a puzzle pair's colour, for its icon outlines (tools/make_map_art.ps1) and its route
 --   boxHeight  the in-world highlight's height in fine units, where the default does not fit
@@ -18,20 +17,20 @@
 local ForestFeatures = {}
 
 -- Returns a skill node's feature.
--- A node shows as _OP while usable today and _NOOP once used. Its claim is the VarBit RAID1_FOREST_<claimed>, on
--- RAID1_FOREST_PLAYER_PERM_VARP1 alongside the goebie reputation (RAID1_GOEBIE_REP), which each claim raises by 3.
+-- A node shows as _OP while usable today and _NOOP once used. Its claim is in VarBit RAID1_FOREST_<claimed>
 local function node(key, name, content, skill, claimed)
     local location = "RAID1_FOREST_DEADEND_CONTENT_" .. content
     return {
         key = key, name = name, skill = skill, claimed = "RAID1_FOREST_" .. claimed,
-        locations = { location .. "_OP", location .. "_NOOP" }, usedLocations = { location .. "_NOOP" },
+        locations = { location .. "_OP", location .. "_NOOP" },
         addedAs = location,
     }
 end
 
--- A node's in-world highlight colour, by skill.
+-- A node's colour, by skill, for its routes, legend row and in-world box. Each is apart from the puzzle pairs' colours
+-- (below) and Trinks' tasks', so a route or box tells which kind of feature it leads to.
 ForestFeatures.skillColours = {
-    prayer = 0x2F6FD6FF, farming = 0x6FD35AFF, mining = 0xD9A066FF, dungeoneering = 0xC07CFFFF,
+    prayer = 0x2F6FD6FF, farming = 0xB4F03CFF, mining = 0x7A4A24FF, dungeoneering = 0x1FA392FF,
 }
 
 -- The nine skill nodes, in legend order.
@@ -47,9 +46,9 @@ ForestFeatures.nodes = {
     node("pool", "Water pool", "POOL", "prayer", "POOL"),
 }
 
--- The order the forest hands out node kinds. Reading zones row by row from the south, each row west to east,
--- each node is the next kind in this cycle, starting from a point that varies per forest. This held in all 15
--- logged forests. A kind skipped between two consecutive nodes means a node was missed.
+-- The order the forest spawns nodes. Reading zones row by row from the south, each row west to east,
+-- each node is the next kind in this cycle, starting from a point that varies per forest. 
+-- A kind skipped between two consecutive nodes means a node was missed.
 ForestFeatures.nodeRotation = {
     "obelisk", "pool", "explorer", "monk", "fungus", "chest", "mushrooms", "rocks", "flowers",
 }
@@ -79,7 +78,7 @@ ForestFeatures.trinksTasks = {
         doneVar = "RAID1_GOEBIE_NPC_SUBTASK" },
 }
 
--- Each puzzle's tool, its source (the game's "key") and the barrier it opens (the game's "door").
+-- Each puzzle's tool, its source ("key") and the barrier it opens ("door").
 -- An opened barrier becomes an unlisted location, so it drops off the map.
 ForestFeatures.tools = {
     {
@@ -93,10 +92,10 @@ ForestFeatures.tools = {
         barrier = { key = "barricade", name = "Barricade", locations = { "RAID1_FOREST_DOOR5" } },
     },
     {
-        -- Info box: "The Lightning ball is already following you."
-        -- Chatbox: "The Lightning ball seems to follow you..."
+        -- Following another player, its info box says "That seems to be following <name> at the moment."
         tool = "Lightning", colour = 0x4FD8FFFF,
         followMessages = { "is already following you", "seems to follow you", "interested in following" },
+        refusals = { "seems to be following (.-) at the moment" },
         source = { key = "lightning", name = "Lightning", npcs = { "RAID1_FOREST_KEY3" }, boxHeight = 650 },
         barrier = { key = "pillars", name = "Pillars", locations = { "RAID1_FOREST_DOOR3" } },
     },
@@ -107,7 +106,7 @@ ForestFeatures.tools = {
     },
     {
         tool = "Mysterious staff", toolItem = "RAID1_FOREST_KEY4", colour = 0x7DDC5AFF,
-        -- The statue remains, without its staff, once the staff is taken.
+        -- The NO_STAFF statue still visually has a staff, but the object changes.
         source = {
             key = "mysterious_statue", name = "Mysterious statue",
             locations = { "RAID1_FOREST_KEY4", "RAID1_FOREST_KEY4_NOSTAFF" },
@@ -115,12 +114,14 @@ ForestFeatures.tools = {
         barrier = { key = "statues", name = "Mysterious statues", locations = { "RAID1_FOREST_DOOR4" } },
     },
     {
-        -- Its line: "Hey! I'll follow you, lead me to my leader's portal ..."
-        -- Once it follows, talking to it again gives another line, hence followsOnTalk.
-        tool = "Lost goebie", colour = 0xFF7AD1FF, followMessages = { "I'll follow you" }, followsOnTalk = true,
+        -- Its line: "Hey! I'll follow you, lead me to my leader's portal ...", and once it follows: "I'm following you,
+        -- have you seen the portal I can use to get out of here yet?" (matched that far, as a refusal starts the same
+        -- and the player named may be "you..."). Following another player, it says "Sorry, I'm following <name> right
+        -- now, they found me first!" instead.
+        tool = "Lost goebie", colour = 0xFF7AD1FF,
+        followMessages = { "I'll follow you", "I'm following you, have you seen" },
+        refusals = { "following (.-) right now, they found me first" },
         source = { key = "goebie", name = "Lost goebie", npcs = { "RAID1_FOREST_KEY6" }, boxHeight = 650 },
-        -- The client caches an image by file name once loaded, so a redrawn icon needs a new name or a client
-        -- restart. That is why this one is not called "portal".
         barrier = { key = "portal_light", name = "Portal", locations = { "RAID1_FOREST_DOOR6" } },
     },
 }
@@ -131,11 +132,7 @@ ForestFeatures.monstersAtMost = 25
 
 -- Trinks gives this many tasks a day.
 ForestFeatures.tasksADay = 3
--- Each task, by RAID1_GOEBIE_CURRENT_QUEST's value, for the ribbon page: a short name (the RuneScape Wiki's, as
--- the game's structs hold no text) and the parts counted for it, each with the count the task asks for and a word
--- for the progress line. A part is a VarBit of RAID1_REPEATABLE_CONTENT (var: the game counts NPCs and locations
--- there) or an item carried (item: the scraps and the driftwood change no variable while gathered). The VarBits,
--- items and targets were seen in game, except Clear Rocks' target, which is the wiki's.
+-- Data for tracking trink's tasks.
 -- The Pahtli plant's task counts nothing: the fruit held shows it done.
 local NPCS, LOCATIONS = "RAID1_GOEBIE_NPC_SUBTASK", "RAID1_GOEBIE_LOC_SUBTASK"
 ForestFeatures.trinksDailyTasks = {
@@ -155,7 +152,7 @@ ForestFeatures.trinksDailyTasks = {
 }
 
 -- A feature's colour, for its routes, rows and boxes: a node's skill's, a puzzle's pair's, or Trinks' tasks'.
-local TASK_COLOUR = 0xE9B93EFF
+local TASK_COLOUR = 0xF2E05AFF -- yellow: the burning log's puzzle has the orange
 function ForestFeatures.colourOf(feature)
     if feature.kind == "node" then return ForestFeatures.skillColours[feature.skill] end
     if feature.isPuzzle then return feature.pair.colour end

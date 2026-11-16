@@ -1,9 +1,7 @@
 -- The height of the tree or plant on each tile of a zone, 0 where nothing stands. The client does not list
 -- the trees as locations (static scenery is merged for drawing), but the ground height with
 -- HeightOffsetType.LOCATION includes them. Far from the player the client drops small scenery and swaps tree
--- models, so a distant read is partial: enough to tell how the zone was turned, but not which tiles are
--- walkable. Those come from the template's data.
-
+-- models, so a distant read is partial, but enough to tell how the zone was turned.
 local StandingHeights = {}
 
 local ZONE_SIZE = 8

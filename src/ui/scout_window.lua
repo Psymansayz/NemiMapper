@@ -42,7 +42,6 @@ local NODE_ROW_HEIGHT = 22
 local parts = nil
 
 -- Returns whether the scout window is open.
--- A parent interface can unload without warning, leaving dead components, so the window is forgotten then.
 local function isOpen()
     if parts ~= nil and ui.Interfaces:GetInterface(parts.window.interfaceID) == nil then parts = nil end
     return parts ~= nil
@@ -112,9 +111,6 @@ local function release()
     parts = nil
 end
 
--- Returns the minimum width: the widest line that does not wrap, plus padding and edges.
--- A node row with both marks, and a scrollbar, are rare enough to leave out so the window stays narrow.
--- The unblock button counts only with isBlocking.
 local function widthNeeded(PrettyUI, numberWidth, wordsWidth, isBlocking)
     local textFont, countFont = config.Font.FromID(TEXT_FONT), config.Font.FromID(COUNT_FONT)
     local widest = math.max(countFont:GetStringWidth("9 Nodes"), numberWidth + MONSTER_GAP + wordsWidth,
@@ -187,7 +183,6 @@ function ScoutWindow.showSettings()
 end
 
 -- Destroys the unblock button a frame after its click hid it, as destroying a component in its
--- own click handler is unsafe.
 -- The controls below move up and the window shrinks by its row.
 local function removeUnblockButton()
     Event.Draw.Unsubscribe(UNBLOCK_SUBSCRIPTION)

@@ -1,18 +1,11 @@
--- Which thing to go to next: the first stop of the shortest tour of every stop, so the player need not
--- double back. A barrier can be visited once its key is held and stays open after; other barriers block the
--- way. Optional stops (keys and barriers on the way to the nodes) are taken where they save walking, open the
--- way, or cost nothing extra.
---
--- The plan is exact: a search over the stops' orders. Distances between stops come from one grid search per
--- stop (with every barrier shut), joined through the barriers opened so far.
--- The stops are the nodes and the puzzles' keys and barriers (six puzzles at most), each a bit in a visited mask.
+-- Which stop to go to next: the first stop of the shortest tour of every stop
 
 local Routes = require("src/game/routes")
 
 local SolvePlan = {}
 
 local INFINITE = math.huge
--- Searches from stops cached on a grid (some 70 KB each) before the cache is cleared. A door opening changes the
+-- Searches from stops cached on a grid before the cache is cleared. A door opening changes the
 -- blocked tiles of every stop's search, so the cache is cleared then; this cap is a safeguard.
 local SEARCHES_KEPT = 64
 
@@ -26,11 +19,8 @@ local function tilesOf(grid, tiles)
     return indexes
 end
 
--- Returns a search from startTiles (a stop's tiles), cached on the grid by startTiles and blocked.
--- Stops stay put, so replanning after the player moves, takes a key or claims a node only searches from the player. A
--- grid's walkable tiles never change, as the forest makes a new grid when they do. The searches made while the doors
--- stood as they do are of no use once one opens, so the cache is cleared when doorsKey (the barriers: the blocked tiles
--- but a stop's own) changes.
+-- Returns a search from startTiles.
+-- Stops stay put, so replanning after the player moves, takes a key or claims a node only searches from the player.
 local function searchFromStop(grid, startTiles, blocked, doorsKey)
     local parts = {}
     for _, tile in ipairs(startTiles) do parts[#parts + 1] = tile.x .. "," .. tile.z end
@@ -55,7 +45,6 @@ local function searchFromStop(grid, startTiles, blocked, doorsKey)
 end
 
 -- Returns the distances from a search's start to each stop, avoiding the blocked tiles.
--- Each is to the ground beside the stop plus one step onto it, matching legs that leave from a stop's own tiles.
 local function distancesFrom(grid, found, stops, blocked)
     local distances = {}
     for index, stop in ipairs(stops) do
@@ -65,10 +54,7 @@ local function distancesFrom(grid, found, stops, blocked)
     return distances
 end
 
--- Returns the stop to go to first, or nil; stops as SolvePlan.nextStop takes them.
--- A stop no order can reach is left out, with whatever needs it, and the rest are planned. playerSearch is
--- the search from the player with every barrier shut, made once and kept through the planning, as the route
--- to the stop chosen uses it too.
+-- Returns the stop to go to first; stops as SolvePlan.nextStop takes them.
 local function plan(grid, player, stops, alwaysBlocked, playerSearch)
     local stopCount = #stops
     if stopCount == 0 then return nil, playerSearch end
@@ -92,7 +78,6 @@ local function plan(grid, player, stops, alwaysBlocked, playerSearch)
         return blocked
     end
     -- base[a][b]: the distance from stop a (0: the player) to stop b with every barrier but a shut.
-    -- The doors shut are the same whichever stop is left out, so one key names them for the stops' search cache.
     local allShut = blockedBut(nil)
     local shutIndexes = {}
     for index in pairs(allShut) do shutIndexes[#shutIndexes + 1] = index end
@@ -104,9 +89,7 @@ local function plan(grid, player, stops, alwaysBlocked, playerSearch)
         local blocked = blockedBut(stop)
         base[index] = distancesFrom(grid, searchFromStop(grid, stop.tiles, blocked, doorsKey), stops, blocked)
     end
-    -- Distances with the doors visited so far open: the base distances joined through each open door in turn,
-    -- building on the joins before it, as a way may pass several open doors.
-    -- They depend only on the doors visited, so they are cached by those, at most 64 tables for six doors.
+    -- Distances with the doors visited so far open
     local joinedByMask = {}
     local function joined(visitedMask)
         visitedMask = visitedMask & doorMask
@@ -211,11 +194,6 @@ local function plan(grid, player, stops, alwaysBlocked, playerSearch)
 end
 
 -- Returns the stops a tour of the mustVisit stops needs.
--- The forest is a tree (one way to each place), so with every barrier open, the way to each mustVisit stop crosses
--- exactly the barriers it needs opened; their keys are needed too, and the ways to those may cross more barriers. The
--- stops to plan with are the mustVisit stops and the barriers and keys they need as required, the other keys as
--- optional, and no other barriers, as nothing wanted is behind them. Also returns the doors of keylessDoors the ways
--- cross, since nothing past those can be planned until their keys turn up. mustVisit: stop -> true for the nodes.
 -- keylessDoors: barriers whose keys are not seen yet, so they are not stops. Ways are traced through them too:
 -- blocking them would make a node behind one of them, and another barrier on the way, look out of reach, and that
 -- other barrier look unneeded.
@@ -268,11 +246,11 @@ function SolvePlan.neededStops(grid, player, stops, mustVisit, keylessDoors)
     return kept, keylessNeeded
 end
 
--- stops: [n] = { kind = "key" or "door", x, z (the thing's tile), tiles (every tile it stands on), needs = the
+-- stops: [n] = { kind = "key" or "door", x, z (the feature's tile), tiles (every tile it stands on), needs = the
 -- key stop a door needs, or nil when the key is held, optional = true if the tour may skip it }.
 -- player: { x, z }. blocked: tile index -> true for tiles never to cross (barriers that are not stops), or nil.
--- Returns the stop to go to first, or nil when nothing is required or reachable, and the search from the player
--- with every barrier shut (Routes.search with parents), for the route to that stop.
+-- Returns the stop to go to first, and the search from the player with every barrier shut (Routes.search with
+-- parents), for the route to that stop.
 local NONE = {}
 function SolvePlan.nextStop(grid, player, stops, blocked)
     return plan(grid, player, stops, blocked or NONE)

@@ -1,5 +1,4 @@
--- Where a window opens: where it was left or centred, and always fully on screen. Each window's place and size are
--- remembered in the settings under its name (map, scout, settings, nodeLegend, puzzleLegend).
+-- Saves window positions so they reopen in the same place.
 
 local Settings = require("src/data/settings")
 

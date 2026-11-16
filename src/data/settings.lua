@@ -56,7 +56,7 @@ local STRINGS = {
 }
 -- Each is a slider on the settings page.
 Settings.numbers = {
-    -- 0 is opaque, 100 invisible. At 44 the box sides have the fill the boxes were designed around (FILL_ALPHA).
+    -- 0 is opaque, 100 invisible. At 44 the box sides have the fill the boxes were designed around (0x8F).
     highlightTransparency = { default = 44, min = 0, max = 100 },
 }
 -- Each window's top-left corner and size.

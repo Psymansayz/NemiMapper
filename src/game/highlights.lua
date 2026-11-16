@@ -1,10 +1,4 @@
--- World highlights chosen in the settings: nodes in their skill's colour, the keys and barriers still to use in
--- their puzzle's colour, the Traitor, the plant, and the target of the route chosen on the map. Each gets a box,
--- and the route's target also gets a beam of light. Only one beam is drawn, as several crash the client.
--- Locations get ShapeEntities, which the client draws at their tile, aligned with the ground, so nothing runs per
--- frame. A moved ShapeEntity is rebuilt late, and moving one crashes the client, so NPCs (the lightning, a goebie,
--- the Traitor) get ShapeInstances instead, moved to the NPC on each logic tick while an NPC is highlighted.
--- An NPC's box has a fixed size because the client's bounds for it change with its animation.
+-- World highlights as chosen in the settings. Each gets a box, and the route's target may get a lootbeam.
 
 local ForestFeatures = require("src/data/forest_features")
 local Forest = require("src/game/forest")
@@ -16,11 +10,10 @@ local Highlights = {}
 
 local FINE_UNITS_PER_TILE = 512
 local LINE_WIDTH = 4.0
-local FILL_ALPHA = 0x90 -- the fill at the default transparency
 local HEIGHT_OFFSET = 30.0 -- fine units above the ground, to avoid clipping into it
 local BOX_HEIGHT = 1200 -- fine units: taller than the tallest node (the obelisk)
-local BOX_OUTSET = 300 -- fine units past a thing's tiles on each side: nodes spread past their tiles
-local MODEL_OUTSET = 60 -- fine units past a thing's model bounds on each side
+local BOX_OUTSET = 300 -- fine units past a feature's tiles on each side: nodes spread past their tiles
+local MODEL_OUTSET = 60 -- fine units past a feature's model bounds on each side
 local BEAM_HEIGHT = 7000 -- fine units, about fourteen tiles
 local BEAM_INSET = 40 -- fine units: keeps the beam's sheets just inside the box
 local BEAM_ALPHA = 0xFF -- at the foot; the beam fades out towards the top
@@ -30,29 +23,29 @@ local SIZE_STEP = 64 -- fine units: bounds are rounded to steps so similar model
 -- The highlighted NPCs (the lightning, the lost goebie, the Traitor) stand on one tile; the box covers just that.
 local NPC_BOX_OUTSET = 0 -- fine units past an NPC's tiles on each side
 local NPC_BOX_HEIGHT = 1300 -- fine units, unless the feature sets boxHeight
-local NPC_RETRY_TICKS = 25 -- logic ticks between searches for an NPC that is out of view
 local DRAW_DISTANCE = 64 * FINE_UNITS_PER_TILE -- the whole forest
 local TRACK_SUBSCRIPTION = "nemi_mapper_track"
 local ENTITY_PREFIX = "nemi_mapper_"
 local ROUTE_ENTITY = "nemi_mapper_route"
+local SEGMENT_ENTITY = "nemi_mapper_route_segment"
 local ROUTE_HALF_WIDTH = 48 -- fine units each side of the route ribbon's centre line
 local ROUTE_HEIGHT_OFFSET = 40.0
 local ROUTE_TILES_PER_FRAME = 12 -- the route is drawn over several frames, starting at the player
 local ROUTE_BUILD_SUBSCRIPTION = "nemi_mapper_route_build"
 
--- Entity name -> { entities (by shape kind), colour, sizeKey }, or for an NPC { instances and
--- instanceNames (by shape kind), colour, entry, npcEntity, tilesASide, transparency, atX, atY, atZ, turn }.
+-- Entity name -> { entities (by shape kind), colour, sizeKey }, or for an NPC { instances (by shape kind), colour,
+-- entry, npcEntity, tilesASide, lastTilesASide, transparency, atX, atY, atZ, turn }.
 local shown = {}
 local tracked = {} -- entity name -> NPC highlight, followed on logic ticks
 local beamTarget = nil -- the chosen route's target, or nil for no beam
 local routeStops = {} -- the chosen route's stops (entry -> true), boxed by their setting
 local NONE = {}
--- "<kind>:<size key>" -> ShapeData, whose origin is the middle of the thing's south-west tile.
+-- "<kind>:<size key>" -> ShapeData, whose origin is the middle of the feature's south-west tile.
 -- Emptied when the transparency changes, as every shape is then remade.
 local shapes = {}
 local shapesTransparency = nil
 
--- Returns the corners of a thing's tiles at a height, moved in by the inset (out, if negative): left-bottom,
+-- Returns the corners of a feature's tiles at a height, moved in by the inset (out, if negative): left-bottom,
 -- right-bottom, right-top, left-top.
 local function cornersOf(width, length, height, inset)
     local half = FINE_UNITS_PER_TILE / 2
@@ -69,14 +62,9 @@ local function colours(count, alpha)
 end
 
 -- Returns the box fill's alpha for the transparency setting (percent: 0 opaque, 100 invisible).
--- Up to the default it fades from opaque to FILL_ALPHA, then on to nothing.
--- The lines stay solid.
+-- The edges stay solid.
 local function fillAlpha()
-    local transparency, default = Settings.highlightTransparency, Settings.numbers.highlightTransparency.default
-    if transparency <= default then
-        return math.floor(0xFF - (0xFF - FILL_ALPHA) * transparency / default + 0.5)
-    end
-    return math.floor(FILL_ALPHA * (100 - transparency) / (100 - default) + 0.5)
+    return math.floor(0xFF * (100 - Settings.highlightTransparency) / 100 + 0.5)
 end
 
 -- A box's twelve edges, as pairs of corners.
@@ -116,7 +104,7 @@ local function boxOf(floor, roof)
     return shape
 end
 
--- Returns a box round a thing's model bounds when known, or round its tiles.
+-- Returns a box round a feature's model bounds when known, or round its tiles.
 local function boxShape(entry)
     local bounds = entry.bounds
     if bounds == nil then
@@ -133,7 +121,6 @@ local function boxShape(entry)
 end
 
 -- Returns a beam of light: two tall sheets crossed at the origin, bright at the foot and fading out at the top.
--- It imitates the game's loot beams, which are spot animations a plugin cannot place.
 local function beamOf(halfX, halfZ)
     local shape = ShapeData.new()
     shape.positions = {
@@ -149,7 +136,7 @@ local function beamOf(halfX, halfZ)
     return shape
 end
 
--- Returns a beam as wide as a thing's box; its entity sits at the box's middle.
+-- Returns a beam as wide as a feature's box; its entity sits at the box's middle.
 local function beamShape(entry)
     local bounds = entry.bounds
     if bounds == nil then
@@ -162,7 +149,7 @@ end
 
 local function stepped(value) return math.floor(value / SIZE_STEP) end
 
--- Returns what a thing's shapes depend on, as a key: its rounded bounds or its tiles, its box
+-- Returns what a feature's shapes depend on, as a key: its rounded bounds or its tiles, its box
 -- height and the transparency.
 local function sizeKeyOf(entry)
     local bounds = entry.bounds
@@ -177,7 +164,6 @@ local SHAPE_MAKERS = { box = boxShape, beam = beamShape }
 
 -- Returns an NPC's shapes, round its tiles (tilesASide, from its config).
 -- The origin is the middle of the floor, which the instance's translation puts at the NPC.
--- The box is two shapes: edges and faces.
 local function npcBoxCorners(tilesASide, height)
     local half = tilesASide * FINE_UNITS_PER_TILE / 2 + NPC_BOX_OUTSET
     local function corners(y)
@@ -207,9 +193,7 @@ local function shapeFor(kind, entry, sizeKey)
     return shape
 end
 
--- Returns whether the settings give a thing a box.
--- The chosen route's stops always get one when their switch is on.
--- held is the set of tools held, by source key.
+-- Returns whether the settings give a feature a box.
 local function boxWanted(entry, held, unneeded)
     if not Settings.highlightInWorld then return false end
     local feature = entry.feature
@@ -227,18 +211,16 @@ local function beamWanted(entry)
     return not Settings.hideTargetBeam and beamTarget == entry
 end
 
--- Returns whether a thing wants a shape of this kind.
--- An NPC's box is two shapes, its edges ("box") and its faces.
-local function isWanted(thing, kind)
-    if kind == "beam" then return thing.beam end
-    return thing.box
+-- Returns whether a wanted highlight has a beam or box.
+local function isWanted(wantedHighlight, kind)
+    if kind == "beam" then return wantedHighlight.beam end
+    return wantedHighlight.box
 end
 
 -- Returns what to highlight now, as [name] = { entry, colour, x, z, box, beam }.
--- held is the set of tools held, looked up when not given.
 local function wanted(held)
-    local things = {}
-    if not Forest.isInside or Forest.playerTile == nil then return things end
+    local wantedHighlights = {}
+    if not Forest.isInside or Forest.playerTile == nil then return wantedHighlights end
     held = held or ToolsHeld.sourceKeys(Forest.playerTile)
     local unneeded = NONE
     if Settings.highlightInWorld and Settings.highlightPuzzles and not Settings.highlightUnneededPuzzles then
@@ -251,14 +233,14 @@ local function wanted(held)
             local left, bottom = Forest.southWestOf(entry)
             -- an NPC moves, so its highlight is named by its kind alone
             local name = ENTITY_PREFIX .. feature.key .. (entry.isNpc and "" or ("_" .. left .. "_" .. bottom))
-            things[name] = { entry = entry, colour = ForestFeatures.colourOf(feature), x = left, z = bottom, box = box,
-                beam = beam }
+            wantedHighlights[name] = { entry = entry, colour = ForestFeatures.colourOf(feature), x = left, z = bottom,
+                box = box, beam = beam }
         end
     end
-    return things
+    return wantedHighlights
 end
 
--- Places a thing's entity: the box at its south-west tile, the beam at the box's middle, its turning axis.
+-- Places a feature's entity: the box at its south-west tile, the beam at the box's middle.
 local function placeEntity(entity, kind, level, left, bottom, entry)
     if kind == "beam" then
         local middleX = (left + entry.width / 2) * FINE_UNITS_PER_TILE
@@ -274,34 +256,32 @@ local function placeEntity(entity, kind, level, left, bottom, entry)
     end
 end
 
--- Makes one entity of a thing's highlight, placed from its south-west tile (thing.x, thing.z).
-local function makeEntity(name, kind, thing, level, sizeKey)
-    local entry = thing.entry
+-- Makes one entity of a feature's highlight, placed from its south-west tile (wantedHighlight.x, wantedHighlight.z).
+local function makeEntity(name, kind, wantedHighlight, level, sizeKey)
+    local entry = wantedHighlight.entry
     local entity = ShapeList.CreateEntity(name .. "_" .. kind)
     entity:SetShapeData(shapeFor(kind, entry, sizeKey))
-    placeEntity(entity, kind, level, thing.x, thing.z, entry)
+    placeEntity(entity, kind, level, wantedHighlight.x, wantedHighlight.z, entry)
     if kind == "beam" then
         entity.rotationSpeed = BEAM_TURN_SPEED
     elseif ShapeEntityAlignType ~= nil then
-        -- the docs name this enum, but it is unconfirmed in game, so it is skipped if missing
         entity.alignType = ShapeEntityAlignType.OBJECT
     end
     entity.heightOffset = HEIGHT_OFFSET
     entity.lineWidth = LINE_WIDTH
     entity:SetDrawDistance(DRAW_DISTANCE)
-    entity.colour = thing.colour
+    entity.colour = wantedHighlight.colour
     return entity
 end
 
--- Returns the NPC's live entity: the one kept while valid, or the first valid one of its config.
--- The search runs only every NPC_RETRY_TICKS, as it fails every tick while the NPC is out of view.
+-- Returns the NPC's live entity.
+-- While the NPC is out of view the search would fail, so it runs again only once NPCs have arrived.
 local function liveNpc(highlight)
     local entity = highlight.npcEntity
     if entity ~= nil and entity.isValid then return entity end
     highlight.npcEntity = nil
-    highlight.retryIn = (highlight.retryIn or 0) - 1
-    if highlight.retryIn > 0 then return nil end
-    highlight.retryIn = NPC_RETRY_TICKS
+    if highlight.searchedAt == Forest.npcArrivals then return nil end
+    highlight.searchedAt = Forest.npcArrivals
     for _, candidate in ipairs(NPCList.ByConfigID(highlight.entry.npcID)) do
         if candidate.isValid then
             highlight.npcEntity = candidate
@@ -311,25 +291,26 @@ local function liveNpc(highlight)
     return nil
 end
 
--- Sets an NPC box's instance's colour and line width, and draws it over the world, as a depth-tested NPC box is hidden
--- by the NPC's model at any size.
+-- Sets an NPC box's instance's colour and line width, and draws it over the world
 local function styleInstance(instance, colour)
     instance.colour = colour
     instance.lineWidth = LINE_WIDTH
     instance.ignoreDepth = true
 end
 
--- One instance of an NPC's highlight, hidden until followTracked shapes and places it. An instance created
--- under the name of one just destroyed is unknown to the client by that name and draws nothing, so each
--- gets a new name.
+-- Shapes an NPC's instance round tilesASide tiles, in its highlight's style.
+local function shapeInstance(instance, highlight, kind, tilesASide)
+    local height = highlight.entry.feature.boxHeight or NPC_BOX_HEIGHT
+    instance:SetShapeData(NPC_SHAPE_MAKERS[kind](tilesASide, height))
+    styleInstance(instance, highlight.colour)
+end
+
+-- One instance of an NPC's highlight, hidden until followTracked places it.
 local instancesMade = 0
 local function makeInstance(highlight, name, kind)
     instancesMade = instancesMade + 1
-    local instanceName = name .. "_" .. kind .. "_" .. instancesMade
-    local instance = ShapeList.CreateInstance(instanceName)
-    assert(instance ~= nil, "the client refused an instance named " .. instanceName)
-    highlight.instanceNames[kind] = instanceName
-    styleInstance(instance, highlight.colour)
+    local instance = ShapeList.CreateInstance(name .. "_" .. kind .. "_" .. instancesMade)
+    shapeInstance(instance, highlight, kind, highlight.lastTilesASide or 1)
     instance.visible = false
     return instance
 end
@@ -339,35 +320,10 @@ local function reshapeSoon(highlight)
     highlight.tilesASide, highlight.atX = nil, nil
 end
 
--- Remakes instances the client has dropped.
-local function remakeInstances(name, highlight)
-    for kind, instance in pairs(highlight.instances) do
-        instance:Destroy() -- likely nothing left to destroy, but this releases the handle
-        highlight.instances[kind] = makeInstance(highlight, name, kind)
-    end
-    reshapeSoon(highlight)
-end
-
-local INSTANCE_CHECK_TICKS = 25 -- logic ticks between checks that the client still has the instances
-local instanceCheckIn = INSTANCE_CHECK_TICKS
-
 -- Runs each logic tick while an NPC is highlighted: moves its shapes to it (hidden while it is out of view),
--- reshapes them when its size changes, and turns the beam. The client sometimes drops live instances, which
--- then draw nothing and are no longer found by name, so they are checked now and then and remade.
 local function followTracked()
-    instanceCheckIn = instanceCheckIn - 1
-    local checkInstances = instanceCheckIn <= 0
-    if checkInstances then instanceCheckIn = INSTANCE_CHECK_TICKS end
     local transparency = Settings.highlightTransparency
-    for name, highlight in pairs(tracked) do
-        if checkInstances then
-            for kind in pairs(highlight.instances) do
-                if ShapeList.GetInstance(highlight.instanceNames[kind]) == nil then
-                    remakeInstances(name, highlight)
-                    break
-                end
-            end
-        end
+    for _, highlight in pairs(tracked) do
         local entity = liveNpc(highlight)
         if entity == nil then
             if highlight.atX ~= nil then
@@ -378,14 +334,9 @@ local function followTracked()
             local tilesASide = entity.config.gridSize
             if highlight.tilesASide ~= tilesASide or highlight.transparency ~= transparency then
                 highlight.tilesASide, highlight.transparency = tilesASide, transparency
-                local height = highlight.entry.feature.boxHeight or NPC_BOX_HEIGHT
+                highlight.lastTilesASide = tilesASide
                 for kind, instance in pairs(highlight.instances) do
-                    -- a shape the client refuses would draw nothing
-                    assert(instance:SetShapeData(NPC_SHAPE_MAKERS[kind](tilesASide, height)),
-                        "the client refused the " .. kind .. " shape of an NPC's highlight")
-                    -- It is undocumented whether a new shape keeps the style, and a box shaped a tick after it is
-                    -- made can go unseen while the beam shows, so it is restyled.
-                    styleInstance(instance, highlight.colour)
+                    shapeInstance(instance, highlight, kind, tilesASide)
                 end
             end
             local position = entity.position
@@ -425,10 +376,9 @@ local function destroyHighlight(name, highlight)
     shown[name] = nil
 end
 
--- Makes, places and colours a location's entities as wanted. Its name holds its tile, so only a new shape moves
--- it: bounds can arrive after the box was made, and the beam's place depends on them.
-local function refreshEntities(name, thing, level)
-    local entry, colour = thing.entry, thing.colour
+-- Makes, places and colours a location's entities.
+local function refreshEntities(name, wantedHighlight, level)
+    local entry, colour = wantedHighlight.entry, wantedHighlight.colour
     local sizeKey = sizeKeyOf(entry)
     local highlight = shown[name]
     if highlight == nil then
@@ -437,7 +387,7 @@ local function refreshEntities(name, thing, level)
     end
     local entities = highlight.entities
     for kind, entity in pairs(entities) do
-        if not isWanted(thing, kind) then
+        if not isWanted(wantedHighlight, kind) then
             entity:Destroy()
             entities[kind] = nil
         end
@@ -450,69 +400,60 @@ local function refreshEntities(name, thing, level)
         highlight.sizeKey = sizeKey
         for kind, entity in pairs(entities) do
             entity:SetShapeData(shapeFor(kind, entry, sizeKey))
-            placeEntity(entity, kind, level, thing.x, thing.z, entry)
+            placeEntity(entity, kind, level, wantedHighlight.x, wantedHighlight.z, entry)
         end
     end
     for kind in pairs(SHAPE_MAKERS) do
-        if entities[kind] == nil and isWanted(thing, kind) then
-            entities[kind] = makeEntity(name, kind, thing, level, sizeKey)
+        if entities[kind] == nil and isWanted(wantedHighlight, kind) then
+            entities[kind] = makeEntity(name, kind, wantedHighlight, level, sizeKey)
         end
     end
 end
 
--- Makes and colours an NPC's instances as wanted; followTracked shapes and moves them.
-local function refreshInstances(name, thing)
+-- Makes and colours an NPC's instances;
+local function refreshInstances(name, wantedHighlight)
     local highlight = shown[name]
     if highlight == nil then
-        highlight = { instances = {}, instanceNames = {}, entry = thing.entry, colour = thing.colour, turn = 0 }
+        highlight = { instances = {}, entry = wantedHighlight.entry, colour = wantedHighlight.colour, turn = 0 }
         shown[name] = highlight
         track(name, highlight)
     end
     local instances = highlight.instances
-    if highlight.colour ~= thing.colour then
-        for _, instance in pairs(instances) do instance.colour = thing.colour end
-        highlight.colour = thing.colour
+    if highlight.colour ~= wantedHighlight.colour then
+        for _, instance in pairs(instances) do instance.colour = wantedHighlight.colour end
+        highlight.colour = wantedHighlight.colour
     end
     for kind in pairs(NPC_SHAPE_MAKERS) do
-        local isWantedNow = isWanted(thing, kind)
+        local isWantedNow = isWanted(wantedHighlight, kind)
         if isWantedNow and instances[kind] == nil then
             instances[kind] = makeInstance(highlight, name, kind)
             reshapeSoon(highlight)
         elseif not isWantedNow and instances[kind] ~= nil then
             instances[kind]:Destroy()
-            instances[kind], highlight.instanceNames[kind] = nil, nil
+            instances[kind] = nil
         end
     end
 end
 
--- Makes the world's highlights match what is wanted. held is the set of tools held, if the caller has it.
+-- Makes the world's highlights match what the settings.
 function Highlights.refresh(held)
-    local things = wanted(held)
+    local wantedHighlights = wanted(held)
     for name, highlight in pairs(shown) do
-        if things[name] == nil then destroyHighlight(name, highlight) end
+        if wantedHighlights[name] == nil then destroyHighlight(name, highlight) end
     end
     local level = Forest.isInside and Player.GetEntity().coordGrid.level or 0
-    for name, thing in pairs(things) do
-        if thing.entry.isNpc then refreshInstances(name, thing) else refreshEntities(name, thing, level) end
+    for name, wantedHighlight in pairs(wantedHighlights) do
+        if wantedHighlight.entry.isNpc then
+            refreshInstances(name, wantedHighlight)
+        else
+            refreshEntities(name, wantedHighlight, level)
+        end
     end
 end
 
--- Returns whether two sets (key -> anything) hold the same keys.
-local function sameKeys(first, second)
-    for key in pairs(first) do
-        if second[key] == nil then return false end
-    end
-    for key in pairs(second) do
-        if first[key] == nil then return false end
-    end
-    return true
-end
-
--- Sets the chosen route's target (a found entry, which gets the beam) and its stops (entry -> true, which get boxes),
--- or nil for no route or the final route.
 function Highlights.beamOn(entry, stops)
     stops = stops or NONE
-    if beamTarget == entry and sameKeys(routeStops, stops) then return end
+    if beamTarget == entry and ForestStops.sameSet(routeStops, stops) then return end
     beamTarget, routeStops = entry, stops
     Highlights.refresh()
 end
@@ -523,7 +464,7 @@ local heldShown = {} -- the tools held at the last refresh from a step or an inv
 function Highlights.followPlayer()
     if not Forest.isInside or Forest.playerTile == nil then return end
     local held = ToolsHeld.sourceKeys(Forest.playerTile)
-    if not sameKeys(held, heldShown) then
+    if not ForestStops.sameSet(held, heldShown) then
         heldShown = held
         Highlights.refresh(held)
     end
@@ -531,9 +472,11 @@ end
 
 -- A line's width is in pixels, so its ends fall short at the turns. The chosen route is instead drawn on the
 -- ground as a flat ribbon with one quad per tile step, so the entity aligns each point to the ground.
--- The route is redrawn only when it changes, a few tiles a frame from the player's end, so no single frame
--- costs much.
-local routeEntity = nil
+-- The first route is drawn a few tiles a frame from the player's end, so no single frame costs much; a new route
+-- takes its place in one step, and walking cuts it back tile by tile.
+local routeEntity = nil -- the route, or once the player follows it, the part past the straight run they are on
+local segmentEntity = nil -- the straight run the player is on, while a corner lies ahead of it
+local routeColour = nil
 local routeBuild = nil -- { edges, ribbon, drawn } while the route is being drawn
 
 -- The ribbon's edges at each point (tile middles, in fine units): { left, right }. At a turn both steps share
@@ -597,6 +540,13 @@ local function newRibbon()
     return { positions = {}, tris = {}, rgba = {}, reached = 1 }
 end
 
+-- Returns the shape of the ribbon's quads from edge first to edge last.
+local function ribbonBetween(edges, first, last)
+    local ribbon = newRibbon()
+    ribbon.reached = first
+    return ribbonTo(ribbon, edges, last)
+end
+
 local function stopBuilding()
     if routeBuild ~= nil then
         routeBuild = nil
@@ -614,7 +564,7 @@ local function buildMore()
 end
 
 -- Returns the target's tile nearest a route's last tile, as x, z, or nil if that tile is on the target.
--- Routes end beside a thing, and one more step onto it makes the route look complete.
+-- Routes end beside a feature, and one more step onto it makes the route look complete.
 local function stepOntoTarget(last)
     local entry = beamTarget
     if entry == nil then return nil end
@@ -653,14 +603,63 @@ end
 -- ribbon alone instead of remaking it.
 local routeShownKey = nil
 
--- Cuts the part behind the player off the drawn route, given the route ahead from the player. The entity is kept,
--- as remaking it each step makes it blink and costs a frame. A route still being drawn is left to finish.
+-- Returns a new entity for the route on its origin tile, in its style.
+local function newRouteEntity(name)
+    local origin, level = routeOrigin, Player.GetEntity().coordGrid.level
+    local entity = ShapeList.CreateEntity(name)
+    entity.coordGrid = CoordGrid.new(level, origin.x // 64, origin.z // 64, origin.x % 64, origin.z % 64)
+    if ShapeEntityAlignType ~= nil then entity.alignType = ShapeEntityAlignType.MODEL end
+    entity.heightOffset = ROUTE_HEIGHT_OFFSET
+    entity.ignoreDepth = false
+    entity.colour = routeColour
+    entity:SetDrawDistance(DRAW_DISTANCE)
+    return entity
+end
+
+local function dropSegment()
+    if segmentEntity ~= nil then
+        segmentEntity:Destroy()
+        segmentEntity = nil
+    end
+end
+
+local restShownKey = nil -- the corner and the corners after it that routeEntity shows, once trimmed
+
+-- Cuts the part behind the player off the drawn route at each tile walked, given the route ahead from the player
+-- (its corner tiles). Only the straight run the player is on changes from tile to tile, so it is an entity of its
+-- own, reshaped each step, and the rest is reshaped only as a corner is passed. Entities are kept rather than
+-- remade, as remaking one makes it blink and costs a frame. A route still being drawn is left to finish.
 function Highlights.trimRoute(tiles)
     if routeEntity == nil or routeBuild ~= nil or tiles == nil or #tiles == 0 then return end
     local points = routePoints(tiles, routeOrigin)
     -- with only the player's tile left, the ribbon is kept until the route changes
     if #points < 2 then return end
-    routeEntity:SetShapeData(ribbonTo(newRibbon(), ribbonEdges(points), #points))
+    local edges = ribbonEdges(points)
+    -- the point where the run the player is on ends, at the first corner that is not the player's own tile
+    local cornerAt, corner = 1, nil
+    for position = 1, #tiles - 1 do
+        local from, to = tiles[position], tiles[position + 1]
+        cornerAt = cornerAt + math.max(math.abs(to.x - from.x), math.abs(to.z - from.z))
+        if cornerAt > 1 then
+            corner = position + 1
+            break
+        end
+    end
+    -- on the last run, one entity holds what is left
+    if corner == nil or cornerAt >= #points then
+        dropSegment()
+        restShownKey = nil
+        routeEntity:SetShapeData(ribbonBetween(edges, 1, #points))
+        return
+    end
+    -- Both parts take the corner's mitred edge from the whole route's, so they meet flush.
+    local restKey = tiles[corner].x .. "," .. tiles[corner].z .. "/" .. (#tiles - corner)
+    if restKey ~= restShownKey then
+        restShownKey = restKey
+        routeEntity:SetShapeData(ribbonBetween(edges, cornerAt, #points))
+    end
+    if segmentEntity == nil then segmentEntity = newRouteEntity(SEGMENT_ENTITY) end
+    segmentEntity:SetShapeData(ribbonBetween(edges, 1, cornerAt))
 end
 
 local function routeKey(tiles, colour)
@@ -670,11 +669,24 @@ local function routeKey(tiles, colour)
     return table.concat(parts, " ")
 end
 
+-- Draws the chosen route on the ground. A route already drawn takes the new one's shape in
+-- place, its entities kept and its origin tile too, so what both routes share is drawn where it was
+-- Only the first route is made from scratch, a few tiles a frame.
 function Highlights.showRoute(tiles, colour)
     local key = routeKey(tiles, colour)
     if routeEntity ~= nil and key ~= nil and key == routeShownKey and not Settings.hideRouteInWorld then return end
-    routeShownKey = key
+    routeShownKey, restShownKey = key, nil
     stopBuilding()
+    local shown = tiles ~= nil and #tiles > 0 and not Settings.hideRouteInWorld and Forest.isInside
+    if shown and routeEntity ~= nil and #routePoints(tiles, routeOrigin) >= 2 then
+        if routeColour ~= colour then
+            routeColour = colour
+            routeEntity.colour = colour
+            if segmentEntity ~= nil then segmentEntity.colour = colour end
+        end
+        return Highlights.trimRoute(tiles)
+    end
+    dropSegment()
     if routeEntity ~= nil then
         routeEntity:Destroy()
         routeEntity = nil
@@ -684,16 +696,8 @@ function Highlights.showRoute(tiles, colour)
     local points = routePoints(tiles, first)
     -- just the player's tile, with nothing to step onto
     if #points < 2 then return end
-    routeOrigin = first
-    local level = Player.GetEntity().coordGrid.level
-    routeEntity = ShapeList.CreateEntity(ROUTE_ENTITY)
-    routeEntity.coordGrid = CoordGrid.new(level, first.x // 64, first.z // 64, first.x % 64, first.z % 64)
-    if ShapeEntityAlignType ~= nil then routeEntity.alignType = ShapeEntityAlignType.MODEL end
-    routeEntity.heightOffset = ROUTE_HEIGHT_OFFSET
-    -- depth-tested so it is not drawn over the player and NPCs on it; this lets trees hide it too
-    routeEntity.ignoreDepth = false
-    routeEntity.colour = colour
-    routeEntity:SetDrawDistance(DRAW_DISTANCE)
+    routeOrigin, routeColour = first, colour
+    routeEntity = newRouteEntity(ROUTE_ENTITY)
     -- a shape needs at least one step, and the first frame always draws one as #points >= 2
     routeBuild = { edges = ribbonEdges(points), ribbon = newRibbon(), drawn = 0 }
     Event.Draw.Subscribe(ROUTE_BUILD_SUBSCRIPTION, buildMore)
