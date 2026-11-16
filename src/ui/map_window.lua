@@ -434,7 +434,7 @@ local function plannedStop(name, player, held, stops, blocked)
     -- Stops are told apart by found feature, so a key's NPC first seen is a new stop but one that drifts is not.
     local stopsAt, blockedAt = {}, {}
     for _, stop in ipairs(stops) do
-        stopsAt[#stopsAt + 1] = tostring(stop.entry) .. stop.kind .. (stop.optional and "?" or "")
+        stopsAt[#stopsAt + 1] = tostring(stop.entry) .. stop.kind
             .. (stop.needs and ("<" .. tostring(stop.needs.entry)) or "")
     end
     for index in pairs(blocked) do blockedAt[#blockedAt + 1] = index end
@@ -474,9 +474,7 @@ local function chosenRoute(player, keep)
     -- Returns the stops a plan must visit, as entry -> true, with the doors waiting for an unseen key.
     local function stopsOf(stops, keylessNeeded)
         local entries = {}
-        for _, stop in ipairs(stops) do
-            if not stop.optional then entries[stop.entry] = true end
-        end
+        for _, stop in ipairs(stops) do entries[stop.entry] = true end
         for _, door in ipairs(keylessNeeded) do entries[door.entry] = true end
         return entries
     end
@@ -603,10 +601,7 @@ local function planHasWork()
         if not Forest.isInside or Forest.playerTile == nil or Forest.grid == nil then
             return #ForestStops.mapStops() > 0
         end
-        for _, stop in ipairs((mappingStops())) do
-            if not stop.optional then return true end
-        end
-        return false
+        return #(mappingStops()) > 0
     end
     if parts.solving then
         for _, toolPair in ipairs(ForestFeatures.tools) do
@@ -1471,8 +1466,9 @@ local function showPoppedWindows()
     for _, host in ipairs({ parts.nodeHost, parts.puzzleHost }) do
         local window = host.window
         if window ~= nil then
-            local shown = mapShown and not parts.closedPopped[window]
-                and (host == parts.nodeHost and parts.legendShown or parts.puzzleShown)
+            local legendShown = parts.puzzleShown
+            if host == parts.nodeHost then legendShown = parts.legendShown end
+            local shown = mapShown and not parts.closedPopped[window] and legendShown
             if shown and window.root.hidden == true then
                 window:Show()
             elseif not shown and window.root.hidden ~= true then

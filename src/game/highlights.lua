@@ -398,10 +398,7 @@ local function refreshEntities(name, wantedHighlight, level)
     end
     if highlight.sizeKey ~= sizeKey then
         highlight.sizeKey = sizeKey
-        for kind, entity in pairs(entities) do
-            entity:SetShapeData(shapeFor(kind, entry, sizeKey))
-            placeEntity(entity, kind, level, wantedHighlight.x, wantedHighlight.z, entry)
-        end
+        for kind, entity in pairs(entities) do entity:SetShapeData(shapeFor(kind, entry, sizeKey)) end
     end
     for kind in pairs(SHAPE_MAKERS) do
         if entities[kind] == nil and isWanted(wantedHighlight, kind) then
@@ -440,6 +437,13 @@ function Highlights.refresh(held)
     local wantedHighlights = wanted(held)
     for name, highlight in pairs(shown) do
         if wantedHighlights[name] == nil then destroyHighlight(name, highlight) end
+    end
+    for name, highlight in pairs(shown) do
+        local made = highlight.entities or highlight.instances
+        if made.beam ~= nil and not wantedHighlights[name].beam then
+            made.beam:Destroy()
+            made.beam = nil
+        end
     end
     local level = Forest.isInside and Player.GetEntity().coordGrid.level or 0
     for name, wantedHighlight in pairs(wantedHighlights) do

@@ -782,12 +782,12 @@ end)
 Event.GameStateChanged.Subscribe("nemi_mapper_state", function(event)
     if event.newState == GameState.SWITCH_WORLD then WorldNumber.forget() end
     if event.newState == GameState.LOBBY or event.newState == GameState.LOGINSCREEN then
-        if event.oldState == GameState.GAME then Settings.save() end
         WorldNumber.forget()
         Forest.stop()
         FullForestAlert.stop()
         Highlights.clear()
         setKeybindsListening(false)
+        if event.oldState == GameState.GAME then Settings.save() end
     elseif event.newState == GameState.GAME
         and (event.oldState == GameState.LOBBY or event.oldState == GameState.LOGINSCREEN) then
         loadSettings()

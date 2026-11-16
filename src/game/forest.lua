@@ -346,7 +346,7 @@ local function noteFollowTexts(shownTexts)
         end
     end
     for sourceKey, holder in pairs(refused) do
-        if Forest.keysTaken[sourceKey] ~= holder then
+        if Forest.keysTaken[sourceKey] ~= holder and playerListed(holder) then
             Forest.keysTaken[sourceKey] = holder
             listenToPlayers()
             foundChanged = true
@@ -515,7 +515,7 @@ local function buildGrid()
     builtGrid, Forest.zoneTurns = grid, grid.turns
     if grid.settled or Forest.ticks >= gridDueTick then Forest.grid = grid end
     -- every zone's heights are in, so the draw distance raised to load them can come down
-    if grid.settled and (not restoreAfterScans or settlingTicksLeft == 0) then
+    if Forest.grid == grid and (not restoreAfterScans or settlingTicksLeft == 0) then
         restoreAfterScans = false
         DrawDistance.restore()
     end
@@ -806,7 +806,7 @@ local function onServerTick()
     if settlingTicksLeft > 0 then
         settlingTicksLeft = settlingTicksLeft - 1
         scan()
-        if settlingTicksLeft == 0 and restoreAfterScans and builtGrid ~= nil and builtGrid.settled then
+        if settlingTicksLeft == 0 and restoreAfterScans and Forest.grid ~= nil then
             restoreAfterScans = false
             DrawDistance.restore()
         end
@@ -828,6 +828,10 @@ local function onServerTick()
     -- An unsettled grid held back is used once if the forest doesn't settle after gridDueTick.
     if Forest.grid == nil and builtGrid ~= nil and Forest.ticks >= gridDueTick then
         Forest.grid, foundChanged = builtGrid, true
+        if not restoreAfterScans or settlingTicksLeft == 0 then
+            restoreAfterScans = false
+            DrawDistance.restore()
+        end
     end
     -- Heights read by a scan change the grid without a find
     if foundChanged or gridStale then publish() end

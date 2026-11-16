@@ -116,12 +116,8 @@ local function plan(grid, player, stops, alwaysBlocked, playerSearch)
         joinedByMask[visitedMask] = walking
         return walking
     end
-    local allVisited, requiredMask = 0, 0
-    for index, stop in ipairs(stops) do
-        allVisited = allVisited | (1 << index)
-        if not stop.optional then requiredMask = requiredMask | (1 << index) end
-    end
-    if requiredMask == 0 then return nil end
+    local allVisited = 0
+    for index in ipairs(stops) do allVisited = allVisited | (1 << index) end
     -- Find the stops some order can reach, taking them in any possible order until no more can be.
     -- The rest, out of reach or behind a door whose key is behind that door, are left out with whatever needs them.
     local doable, doableMask, taken = {}, 0, true
@@ -167,7 +163,7 @@ local function plan(grid, player, stops, alwaysBlocked, playerSearch)
     -- first stop.
     local remembered, firstStop = {}, nil
     local function cheapest(at, visitedMask)
-        if visitedMask & requiredMask == requiredMask then return 0 end
+        if visitedMask == allVisited then return 0 end
         local key = at * (allVisited + 1) + visitedMask
         if remembered[key] ~= nil then return remembered[key] end
         local best, bestFirst = INFINITE, nil
@@ -231,13 +227,7 @@ function SolvePlan.neededStops(grid, player, stops, mustVisit, keylessDoors)
     end
     local kept = {}
     for _, stop in ipairs(stops) do
-        if needed[stop] then
-            stop.optional = nil
-            kept[#kept + 1] = stop
-        elseif stop.kind == "key" then
-            stop.optional = true
-            kept[#kept + 1] = stop
-        end
+        if needed[stop] then kept[#kept + 1] = stop end
     end
     local keylessNeeded = {}
     for _, door in ipairs(keylessDoors) do
@@ -247,7 +237,7 @@ function SolvePlan.neededStops(grid, player, stops, mustVisit, keylessDoors)
 end
 
 -- stops: [n] = { kind = "key" or "door", x, z (the feature's tile), tiles (every tile it stands on), needs = the
--- key stop a door needs, or nil when the key is held, optional = true if the tour may skip it }.
+-- key stop a door needs, or nil when the key is held }.
 -- player: { x, z }. blocked: tile index -> true for tiles never to cross (barriers that are not stops), or nil.
 -- Returns the stop to go to first, and the search from the player with every barrier shut (Routes.search with
 -- parents), for the route to that stop.
