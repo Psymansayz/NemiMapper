@@ -182,7 +182,6 @@ end
 
 -- Returns the stops of a tour through the targets, which must be visited, plus the puzzle stops it needs.
 -- The barriers on the routes to the targets and their keys are required.
--- Other keys are added where they cost nothing.
 function ForestStops.stopsToward(targets, player, held)
     local stops, mustVisit, isStop, isTarget = {}, {}, {}, {}
     local puzzleStops = ForestStops.solveStops(held)
@@ -215,9 +214,7 @@ end
 -- Returns the puzzle entries that mappingStops does not require.
 local function unneededAmong(mappingStops, held)
     local required, unneeded = {}, {}
-    for _, stop in ipairs(mappingStops) do
-        if not stop.optional then required[stop.entry] = true end
-    end
+    for _, stop in ipairs(mappingStops) do required[stop.entry] = true end
     for _, stop in ipairs(ForestStops.solveStops(held)) do
         if not required[stop.entry] then unneeded[stop.entry] = true end
     end
