@@ -17,8 +17,7 @@ local FLASH_SECONDS = 1 -- on this long, then off this long
 local FLASH_COLOUR = 0x2ECC4070 -- green, partly see-through
 -- A fully transparent rectangle may take no clicks, and one this faint shows nothing.
 local BLOCKER_COLOUR = 0x00000001
--- TEMPORARY, lowered to make the alert easier to test: set back to 9 (every kind) when done.
-local KINDS_FOR_ALERT = 6
+local KINDS_FOR_ALERT = 9 -- every node kind
 
 FullForestAlert.onBlocked = nil   -- called when the blocker goes up (main.lua raises the scout window over it)
 FullForestAlert.onUnblocked = nil -- called when it comes down

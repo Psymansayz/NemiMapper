@@ -191,23 +191,6 @@ Forest.onInventoryChanged = function()
     Highlights.followPlayer()
 end
 
--- TEMPORARY (dev only): the probe logs the forest's data from the settings' debug buttons, each change the plugin
--- finds with its server tick, and the tiles walked; the cheats back two more buttons.
--- Unknown names are logged once.
-local ForestProbe = require("src/debug/forest_probe")
-local DevCheats = require("src/debug/dev_cheats")
-ForestProbe.start()
-local showChange, showStep = Forest.onChanged, Forest.onMoved
-Forest.onChanged = function()
-    ForestProbe.logChange()
-    showChange()
-end
-Forest.onMoved = function()
-    ForestProbe.noteStep()
-    showStep()
-end
-for _, name in ipairs(require("src/game/game_ids").unresolved) do print(LOG_PREFIX .. "UNRESOLVED|" .. name) end
-
 Forest.start()
 
 -- The plugin's two hub pages. The ribbon page and the settings page.
@@ -665,13 +648,6 @@ local function addAllSettings(view)
         end
     end
     addRestoreButton(view)
-    -- TEMPORARY (dev only)
-    view:AddDivider()
-    view:AddSimpleButton("Debug: log the forest's data", ForestProbe.logForest)
-    view:AddSimpleButton("Debug: log the world and minimap components", ForestProbe.logInterfaceComponents)
-    view:AddSimpleButton("Debug: log the template square (stand in it)", ForestProbe.logTemplateSquare)
-    view:AddSimpleButton("Debug: clear today's node claims (cheat)", DevCheats.clearClaims)
-    view:AddSimpleButton("Debug: start or end a Trinks' task (cheat)", DevCheats.toggleTask)
 end
 
 local function buildSettingsPage(pluginLayer)
@@ -800,7 +776,6 @@ function PluginShutdown()
     Event.SettingsLayerReady.Unsubscribe("nemi_mapper_settings")
     Event.GameStateChanged.Unsubscribe("nemi_mapper_state")
     setKeybindsListening(false)
-    ForestProbe.stop()
     Forest.stop()
     FullForestAlert.stop()
     Highlights.clear()
