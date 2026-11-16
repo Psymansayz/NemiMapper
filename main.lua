@@ -763,7 +763,7 @@ Event.GameStateChanged.Subscribe("nemi_mapper_state", function(event)
         FullForestAlert.stop()
         Highlights.clear()
         setKeybindsListening(false)
-        if event.oldState == GameState.GAME then Settings.save() end
+        Settings.save()
     elseif event.newState == GameState.GAME
         and (event.oldState == GameState.LOBBY or event.oldState == GameState.LOGINSCREEN) then
         loadSettings()
