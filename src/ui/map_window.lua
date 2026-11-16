@@ -480,15 +480,19 @@ local function chosenRoute(player, keep)
     end
     -- A route with no stop due to keys not yet seen sends the player to the center of the forest.
     -- If the only stop accessible is a key taken by another player, the route goes to that stop.
-    local function routeByPlan(name, stops, keylessNeeded)
+    local function routeByPlan(name, stops, keylessNeeded, takenNeeded)
         local stop, playerSearch = ForestStops.keptStop(stops, keep), nil
         if stop == nil then
             stop, playerSearch = plannedStop(name, player, held, stops, ForestStops.tilesNotInPlan(stops, blocked))
         end
         if stop == nil then
             for _, takenStop in ipairs(ForestStops.takenKeyStops()) do
-                local route = Routes.routeTo(Forest.grid, player, { takenStop }, blocked)
-                if route ~= nil then return route, takenStop.colour, takenStop.entry, { [takenStop.entry] = true } end
+                if takenNeeded[takenStop.entry.feature.key] then
+                    local route = Routes.routeTo(Forest.grid, player, { takenStop }, blocked)
+                    if route ~= nil then
+                        return route, takenStop.colour, takenStop.entry, { [takenStop.entry] = true }
+                    end
+                end
             end
             if #keylessNeeded == 0 then return nil end
             local keysUnseen = {}
@@ -519,8 +523,8 @@ local function chosenRoute(player, keep)
         end
         local openRoute = Routes.routeTo(Forest.grid, player, tiles)
         if openRoute == nil then return nil end
-        local stops, keylessNeeded = ForestStops.stopsToward({ stopAt(openRoute) }, player, held)
-        return routeByPlan(name, stops, keylessNeeded)
+        local stops, keylessNeeded, takenNeeded = ForestStops.stopsToward({ stopAt(openRoute) }, player, held)
+        return routeByPlan(name, stops, keylessNeeded, takenNeeded)
     end
     -- Returns the route to a feature of a kind and key, aiming for the one nearest with the barriers open.
     local function routeToThing(kind, key, colour)
@@ -539,10 +543,10 @@ local function chosenRoute(player, keep)
             function() return mouth end)
     end
     if parts.mapping then
-        local stops, keylessNeeded = mappingStops()
-        return routeByPlan("nodes", stops, keylessNeeded)
+        local stops, keylessNeeded, takenNeeded = mappingStops()
+        return routeByPlan("nodes", stops, keylessNeeded, takenNeeded)
     end
-    if parts.solving then return routeByPlan("puzzles", ForestStops.solveStops(held), {}) end
+    if parts.solving then return routeByPlan("puzzles", ForestStops.solveStops(held), {}, Forest.keysTaken) end
     for _, sign in ipairs(ENTRANCE_SIGNS) do
         if sign.key == parts.routeShown then
             local opening = ForestStops.openingOn(sign.side)
