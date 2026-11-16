@@ -738,11 +738,15 @@ local function followRoute(player)
         parts.plans = {}
         return drawRoutes(true)
     end
-    if nextCorner > #drawn.tiles then return end
-    local ahead = { routeTile }
-    for position = nextCorner, #drawn.tiles do ahead[#ahead + 1] = drawn.tiles[position] end
+    local ahead = drawn.ahead or drawn.tiles
+    if nextCorner <= #drawn.tiles then
+        ahead = { routeTile }
+        for position = nextCorner, #drawn.tiles do ahead[#ahead + 1] = drawn.tiles[position] end
+        drawn.ahead = ahead
+    end
     parts.routes:Clear()
     if view().activeRoute then drawRoute(ahead, drawn.colour) end
+    if nextCorner > #drawn.tiles then return end
     -- The world's line is cut back at each tile walked along it (highlights.lua).
     local trimmedAt = routeTile.x .. "," .. routeTile.z
     if drawn.trimmedAt ~= trimmedAt then
