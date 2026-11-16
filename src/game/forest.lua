@@ -384,7 +384,7 @@ local announcingTicksLeft = 0 -- server ticks to wait for the burst; set only on
 -- traitor is attackable but is a task). Each entity counts once, by uid.
 local function noteMonster(npcEntity)
     local npcConfig = npcEntity.config
-    if npcConfig.attackOpIndex < 0 or npcConfig.isFamiliar then return end
+    if npcConfig == nil or npcConfig.attackOpIndex < 0 or npcConfig.isFamiliar then return end
     if monstersSeen[npcEntity.uid] then return end
     monstersSeen[npcEntity.uid] = true
     Forest.monstersSpawned = Forest.monstersSpawned + 1
