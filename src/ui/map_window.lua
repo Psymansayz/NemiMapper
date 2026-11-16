@@ -680,6 +680,11 @@ local function drawRoutes(afresh)
         parts.mapping, parts.solving = false, false
         showLegendStates()
     end
+    local waitsFor = parts.routeWaitsFor
+    if waitsFor ~= nil and parts.routeShown == waitsFor.key and not ForestStops.isWorkLeft(waitsFor) then
+        dropRouteChoice()
+        showLegendStates()
+    end
     local player = Forest.isInside and Forest.playerTile or nil
     local route, colour, target, stops, keysUnseen = nil, nil, nil, nil, nil
     if Forest.grid ~= nil and player ~= nil and routeChosen() then
@@ -1299,6 +1304,17 @@ end
 chooseRoute = function(routeShown, solving, mapping)
     newRedraw()
     parts.routeShown, parts.solving, parts.mapping = routeShown, solving, mapping
+    parts.routeWaitsFor = nil
+    for _, row in ipairs(parts.legendRows) do
+        if row.feature.key == routeShown and ForestStops.isWorkLeft(row.feature) then
+            parts.routeWaitsFor = row.feature
+        end
+    end
+    for _, toolPair in ipairs(ForestFeatures.tools) do
+        if toolPair.source.key == routeShown and ForestStops.isWorkLeft(toolPair.source) then
+            parts.routeWaitsFor = toolPair.source
+        end
+    end
     showLegendStates()
     drawRoutes(true)
 end

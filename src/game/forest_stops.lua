@@ -112,6 +112,12 @@ function ForestStops.keptStop(stops, entry)
     return nil
 end
 
+function ForestStops.isWorkLeft(feature)
+    if feature.kind == "node" then return not Forest.isNodeClaimed(feature.key) end
+    if feature.kind == "source" then return not Forest.doorsGone[feature.pair.barrier.key] end
+    return feature.kind == "task" and Forest.isTaskActive(feature)
+end
+
 -- Returns the mapping plan's stops: every found node not claimed today, and the active task's target.
 function ForestStops.mapStops()
     local stops = {}
