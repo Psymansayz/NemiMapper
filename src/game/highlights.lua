@@ -11,8 +11,6 @@ local Highlights = {}
 local FINE_UNITS_PER_TILE = 512
 local LINE_WIDTH = 4.0
 local HEIGHT_OFFSET = 30.0 -- fine units above the ground, to avoid clipping into it
-local BOX_HEIGHT = 1200 -- fine units: taller than the tallest node (the obelisk)
-local BOX_OUTSET = 300 -- fine units past a feature's tiles on each side: nodes spread past their tiles
 local MODEL_OUTSET = 60 -- fine units past a feature's model bounds on each side
 local BEAM_HEIGHT = 7000 -- fine units, about fourteen tiles
 local BEAM_INSET = 40 -- fine units: keeps the beam's sheets just inside the box
@@ -20,9 +18,6 @@ local BEAM_ALPHA = 0xFF -- at the foot; the beam fades out towards the top
 local BEAM_TURN_SPEED = 120.0 -- degrees a second, like the game's loot beams
 local LOGIC_TICKS_A_SECOND = 50
 local SIZE_STEP = 64 -- fine units: bounds are rounded to steps so similar models share a shape
--- The highlighted NPCs (the lightning, the lost goebie, the Traitor) stand on one tile; the box covers just that.
-local NPC_BOX_OUTSET = 0 -- fine units past an NPC's tiles on each side
-local NPC_BOX_HEIGHT = 1300 -- fine units, unless the feature sets boxHeight
 local DRAW_DISTANCE = 64 * FINE_UNITS_PER_TILE -- the whole forest
 local TRACK_SUBSCRIPTION = "nemi_mapper_track"
 local ENTITY_PREFIX = "nemi_mapper_"
@@ -34,7 +29,7 @@ local ROUTE_TILES_PER_FRAME = 12 -- the route is drawn over several frames, star
 local ROUTE_BUILD_SUBSCRIPTION = "nemi_mapper_route_build"
 
 -- Entity name -> { entities (by shape kind), colour, sizeKey }, or for an NPC { instances (by shape kind), colour,
--- entry, npcEntity, tilesASide, lastTilesASide, transparency, atX, atY, atZ, turn }.
+-- entry, npcEntity, transparency, atX, atY, atZ, turn }.
 local shown = {}
 local tracked = {} -- entity name -> NPC highlight, followed on logic ticks
 local beamTarget = nil -- the chosen route's target, or nil for no beam
@@ -44,16 +39,6 @@ local NONE = {}
 -- Emptied when the transparency changes, as every shape is then remade.
 local shapes = {}
 local shapesTransparency = nil
-
--- Returns the corners of a feature's tiles at a height, moved in by the inset (out, if negative): left-bottom,
--- right-bottom, right-top, left-top.
-local function cornersOf(width, length, height, inset)
-    local half = FINE_UNITS_PER_TILE / 2
-    local left, bottom = -half + inset, -half + inset
-    local right, top = width * FINE_UNITS_PER_TILE - half - inset, length * FINE_UNITS_PER_TILE - half - inset
-    return { Vector3.new(left, height, bottom), Vector3.new(right, height, bottom), Vector3.new(right, height, top),
-        Vector3.new(left, height, top) }
-end
 
 local function colours(count, alpha)
     local list = {}
@@ -104,21 +89,20 @@ local function boxOf(floor, roof)
     return shape
 end
 
--- Returns a box round a feature's model bounds when known, or round its tiles.
-local function boxShape(entry)
+-- Returns the floor and roof corners of the box round a feature's model bounds: left-bottom, right-bottom,
+-- right-top, left-top.
+local function floorAndRoof(entry)
     local bounds = entry.bounds
-    if bounds == nil then
-        return boxOf(cornersOf(entry.width, entry.length, 0, -BOX_OUTSET),
-            cornersOf(entry.width, entry.length, entry.feature.boxHeight or BOX_HEIGHT, -BOX_OUTSET))
-    end
     local left, right = bounds.x - MODEL_OUTSET, bounds.X + MODEL_OUTSET
     local bottom, top = bounds.z - MODEL_OUTSET, bounds.Z + MODEL_OUTSET
     local function corners(y)
         return { Vector3.new(left, y, bottom), Vector3.new(right, y, bottom), Vector3.new(right, y, top),
             Vector3.new(left, y, top) }
     end
-    return boxOf(corners(0), corners(entry.feature.boxHeight or bounds.height + MODEL_OUTSET))
+    return corners(0), corners(entry.feature.boxHeight or bounds.height + MODEL_OUTSET)
 end
+
+local function boxShape(entry) return boxOf(floorAndRoof(entry)) end
 
 -- Returns a beam of light: two tall sheets crossed at the origin, bright at the foot and fading out at the top.
 local function beamOf(halfX, halfZ)
@@ -139,46 +123,27 @@ end
 -- Returns a beam as wide as a feature's box; its entity sits at the box's middle.
 local function beamShape(entry)
     local bounds = entry.bounds
-    if bounds == nil then
-        return beamOf(entry.width * FINE_UNITS_PER_TILE / 2 + BOX_OUTSET - BEAM_INSET,
-            entry.length * FINE_UNITS_PER_TILE / 2 + BOX_OUTSET - BEAM_INSET)
-    end
     return beamOf((bounds.X - bounds.x) / 2 + MODEL_OUTSET - BEAM_INSET,
         (bounds.Z - bounds.z) / 2 + MODEL_OUTSET - BEAM_INSET)
 end
 
 local function stepped(value) return math.floor(value / SIZE_STEP) end
 
--- Returns what a feature's shapes depend on, as a key: its rounded bounds or its tiles, its box
--- height and the transparency.
+-- Returns what a feature's shapes depend on, as a key: its rounded bounds, its box height and the transparency.
 local function sizeKeyOf(entry)
     local bounds = entry.bounds
     local height = (entry.feature.boxHeight and ("h" .. entry.feature.boxHeight) or "")
         .. "t" .. Settings.highlightTransparency
-    if bounds == nil then return entry.width .. "x" .. entry.length .. height end
     return "b" .. stepped(bounds.x) .. "," .. stepped(bounds.X) .. "," .. stepped(bounds.z) .. ","
         .. stepped(bounds.Z) .. "," .. stepped(bounds.height) .. height
 end
 
 local SHAPE_MAKERS = { box = boxShape, beam = beamShape }
 
--- Returns an NPC's shapes, round its tiles (tilesASide, from its config).
--- The origin is the middle of the floor, which the instance's translation puts at the NPC.
-local function npcBoxCorners(tilesASide, height)
-    local half = tilesASide * FINE_UNITS_PER_TILE / 2 + NPC_BOX_OUTSET
-    local function corners(y)
-        return { Vector3.new(-half, y, -half), Vector3.new(half, y, -half), Vector3.new(half, y, half),
-            Vector3.new(-half, y, half) }
-    end
-    return corners(0), corners(height)
-end
-local function npcEdgesShape(tilesASide, height) return edgesOf(npcBoxCorners(tilesASide, height)) end
-local function npcFacesShape(tilesASide, height) return facesOf(npcBoxCorners(tilesASide, height)) end
-local function npcBeamShape(tilesASide)
-    local half = tilesASide * FINE_UNITS_PER_TILE / 2 + NPC_BOX_OUTSET - BEAM_INSET
-    return beamOf(half, half)
-end
-local NPC_SHAPE_MAKERS = { box = npcEdgesShape, faces = npcFacesShape, beam = npcBeamShape }
+-- An NPC's shapes. An NPC's box is centred on its tile's middle, which the instance's translation puts at the NPC.
+local function npcEdgesShape(entry) return edgesOf(floorAndRoof(entry)) end
+local function npcFacesShape(entry) return facesOf(floorAndRoof(entry)) end
+local NPC_SHAPE_MAKERS = { box = npcEdgesShape, faces = npcFacesShape, beam = beamShape }
 
 local function shapeFor(kind, entry, sizeKey)
     if shapesTransparency ~= Settings.highlightTransparency then
@@ -243,14 +208,9 @@ end
 -- Places a feature's entity: the box at its south-west tile, the beam at the box's middle.
 local function placeEntity(entity, kind, level, left, bottom, entry)
     if kind == "beam" then
-        local middleX = (left + entry.width / 2) * FINE_UNITS_PER_TILE
-        local middleZ = (bottom + entry.length / 2) * FINE_UNITS_PER_TILE
-        if entry.bounds ~= nil then
-            local tileMiddleX, tileMiddleZ = (left + 0.5) * FINE_UNITS_PER_TILE, (bottom + 0.5) * FINE_UNITS_PER_TILE
-            middleX, middleZ = tileMiddleX + (entry.bounds.x + entry.bounds.X) / 2,
-                tileMiddleZ + (entry.bounds.z + entry.bounds.Z) / 2
-        end
-        entity.coordFine = CoordFine.new(level, middleX, middleZ)
+        local bounds = entry.bounds
+        entity.coordFine = CoordFine.new(level, (left + 0.5) * FINE_UNITS_PER_TILE + (bounds.x + bounds.X) / 2,
+            (bottom + 0.5) * FINE_UNITS_PER_TILE + (bounds.z + bounds.Z) / 2)
     else
         entity.coordGrid = CoordGrid.new(level, left // 64, bottom // 64, left % 64, bottom % 64)
     end
@@ -298,10 +258,9 @@ local function styleInstance(instance, colour)
     instance.ignoreDepth = true
 end
 
--- Shapes an NPC's instance round tilesASide tiles, in its highlight's style.
-local function shapeInstance(instance, highlight, kind, tilesASide)
-    local height = highlight.entry.feature.boxHeight or NPC_BOX_HEIGHT
-    instance:SetShapeData(NPC_SHAPE_MAKERS[kind](tilesASide, height))
+-- Shapes an NPC's instance in its highlight's style.
+local function shapeInstance(instance, highlight, kind)
+    instance:SetShapeData(NPC_SHAPE_MAKERS[kind](highlight.entry))
     styleInstance(instance, highlight.colour)
 end
 
@@ -310,19 +269,13 @@ local instancesMade = 0
 local function makeInstance(highlight, name, kind)
     instancesMade = instancesMade + 1
     local instance = ShapeList.CreateInstance(name .. "_" .. kind .. "_" .. instancesMade)
-    shapeInstance(instance, highlight, kind, highlight.lastTilesASide or 1)
+    shapeInstance(instance, highlight, kind)
     instance.visible = false
     return instance
 end
 
--- Makes the next tick shape and place an NPC's instances.
-local function reshapeSoon(highlight)
-    highlight.tilesASide, highlight.atX = nil, nil
-end
-
 -- Runs each logic tick while an NPC is highlighted: moves its shapes to it (hidden while it is out of view),
 local function followTracked()
-    local transparency = Settings.highlightTransparency
     for _, highlight in pairs(tracked) do
         local entity = liveNpc(highlight)
         if entity == nil then
@@ -331,14 +284,6 @@ local function followTracked()
                 for _, instance in pairs(highlight.instances) do instance.visible = false end
             end
         else
-            local tilesASide = entity.config.gridSize
-            if highlight.tilesASide ~= tilesASide or highlight.transparency ~= transparency then
-                highlight.tilesASide, highlight.transparency = tilesASide, transparency
-                highlight.lastTilesASide = tilesASide
-                for kind, instance in pairs(highlight.instances) do
-                    shapeInstance(instance, highlight, kind, tilesASide)
-                end
-            end
             local position = entity.position
             local x, y, z = position.x, position.y, position.z
             if highlight.atX ~= x or highlight.atY ~= y or highlight.atZ ~= z then
@@ -410,8 +355,10 @@ end
 -- Makes and colours an NPC's instances;
 local function refreshInstances(name, wantedHighlight)
     local highlight = shown[name]
+    local transparency = Settings.highlightTransparency
     if highlight == nil then
-        highlight = { instances = {}, entry = wantedHighlight.entry, colour = wantedHighlight.colour, turn = 0 }
+        highlight = { instances = {}, entry = wantedHighlight.entry, colour = wantedHighlight.colour, turn = 0,
+            transparency = transparency }
         shown[name] = highlight
         track(name, highlight)
     end
@@ -420,11 +367,17 @@ local function refreshInstances(name, wantedHighlight)
         for _, instance in pairs(instances) do instance.colour = wantedHighlight.colour end
         highlight.colour = wantedHighlight.colour
     end
+    -- only the faces are see-through
+    if highlight.transparency ~= transparency then
+        highlight.transparency = transparency
+        if instances.faces ~= nil then shapeInstance(instances.faces, highlight, "faces") end
+    end
     for kind in pairs(NPC_SHAPE_MAKERS) do
         local isWantedNow = isWanted(wantedHighlight, kind)
         if isWantedNow and instances[kind] == nil then
             instances[kind] = makeInstance(highlight, name, kind)
-            reshapeSoon(highlight)
+            -- the next tick places it
+            highlight.atX = nil
         elseif not isWantedNow and instances[kind] ~= nil then
             instances[kind]:Destroy()
             instances[kind] = nil

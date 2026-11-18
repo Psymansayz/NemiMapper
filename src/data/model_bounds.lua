@@ -23,4 +23,8 @@ return {
     RAID1_FOREST_KEY4 = { -284, 240, -366, 263, 855 },
     RAID1_FOREST_KEY5 = { -252, 271, -338, 254, 474 },
     RAID1_GOEBIE_MINIQUEST_FRUIT = { -341, 508, -264, 331, 1298 },
+    -- The NPCs' boxes are their tile, not their models' bounds, and are as tall as they stand.
+    RAID1_FOREST_KEY3 = { -256, 256, -256, 256, 590 },
+    RAID1_FOREST_KEY6 = { -256, 256, -256, 256, 590 },
+    RAID1_GOEBIE_TRAITOR = { -256, 256, -256, 256, 915 },
 }

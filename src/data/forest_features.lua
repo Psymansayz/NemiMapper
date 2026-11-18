@@ -12,7 +12,7 @@
 --   refusals   Lua patterns of the text shown when an NPC tool follows another player, capturing that player's name
 --   claimed    the VarBit (var.VarPlayer) set once the node's XP is claimed today
 --   colour     a puzzle pair's colour, for its icon outlines (tools/make_map_art.ps1) and its route
---   boxHeight  the in-world highlight's height in fine units, where the default does not fit
+--   boxHeight  the in-world highlight's height in fine units, where its saved box's does not fit
 
 local ForestFeatures = {}
 
@@ -73,7 +73,7 @@ ForestFeatures.trinksTasks = {
         locations = { "RAID1_GOEBIE_MINIQUEST_FRUIT", "RAID1_GOEBIE_MINIQUEST_FRUIT_NO_OP" },
         addedAs = "RAID1_GOEBIE_MINIQUEST_FRUIT_MULTI",
     },
-    { key = "traitor", name = "Traitor", npcs = { "RAID1_GOEBIE_TRAITOR" }, boxHeight = 975,
+    { key = "traitor", name = "Traitor", npcs = { "RAID1_GOEBIE_TRAITOR" },
         questStruct = "RAID1_GOEBIE_MINIQUEST_9",
         doneVar = "RAID1_GOEBIE_NPC_SUBTASK" },
 }
@@ -96,7 +96,7 @@ ForestFeatures.tools = {
         tool = "Lightning", colour = 0x4FD8FFFF,
         followMessages = { "is already following you", "seems to follow you", "interested in following" },
         refusals = { "seems to be following (.-) at the moment" },
-        source = { key = "lightning", name = "Lightning", npcs = { "RAID1_FOREST_KEY3" }, boxHeight = 650 },
+        source = { key = "lightning", name = "Lightning", npcs = { "RAID1_FOREST_KEY3" } },
         barrier = { key = "pillars", name = "Pillars", locations = { "RAID1_FOREST_DOOR3" } },
     },
     {
@@ -121,7 +121,7 @@ ForestFeatures.tools = {
         tool = "Lost goebie", colour = 0xFF7AD1FF,
         followMessages = { "I'll follow you", "I'm following you, have you seen" },
         refusals = { "following (.-) right now, they found me first" },
-        source = { key = "goebie", name = "Lost goebie", npcs = { "RAID1_FOREST_KEY6" }, boxHeight = 650 },
+        source = { key = "goebie", name = "Lost goebie", npcs = { "RAID1_FOREST_KEY6" } },
         barrier = { key = "portal_light", name = "Portal", locations = { "RAID1_FOREST_DOOR6" } },
     },
 }
