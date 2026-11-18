@@ -11,6 +11,7 @@ local ScoutWindow = require("src/ui/scout_window")
 local WindowPlace = require("src/ui/window_place")
 local FullForestAlert = require("src/ui/full_forest_alert")
 local StatusText = require("src/ui/status_text")
+local Colours = require("src/ui/colours")
 local ForestFeatures = require("src/data/forest_features")
 
 local PrettyUI = prettyui
@@ -21,11 +22,16 @@ local pageView, settingsView = nil, nil
 local settingsWindow = nil
 local openSettings, forgetControls 
 
-local function isSettingsWindowOpen()
+-- Forgets the settings window once its interface is gone.
+local function forgetClosedSettingsWindow()
     if settingsWindow ~= nil and ui.Interfaces:GetInterface(settingsWindow.interfaceID) == nil then
         forgetControls(settingsWindow)
         settingsWindow = nil
     end
+end
+
+local function isSettingsWindowOpen()
+    forgetClosedSettingsWindow()
     return settingsWindow ~= nil
 end
 
@@ -46,7 +52,7 @@ local function openMapHidden()
 end
 
 local function openScout()
-    openWindow(ScoutWindow.open, openMap, FullForestAlert.stop, FullForestAlert.isBlocking()) -- its unblock button
+    openWindow(ScoutWindow.open, openMap)
 end
 
 -- Called when the 9/9 alert blocks the game: opens the scout window with its unblock button.
@@ -56,7 +62,7 @@ FullForestAlert.onBlocked = function()
 end
 FullForestAlert.onUnblocked = function() ScoutWindow.showBlocking(false) end
 
--- The keybinds, unbound until the player binds them on the settings page. There is one, to open or close the map
+-- The keybinds, unbound until the player binds them on the settings page. There is one, to open or close the map.
 local KEYBIND_SUBSCRIPTION = "nemi_mapper_keybinds"
 local keybindsListening = false
 local function toggleMap()
@@ -180,6 +186,7 @@ Forest.onChanged = function()
     end
 end
 Forest.onMoved = function()
+    ToolsHeld.update(Forest.playerTile)
     MapWindow.showPlayer()
     Highlights.followPlayer()
 end
@@ -187,6 +194,7 @@ Forest.onMonstersChanged = ScoutWindow.showMonsters
 Forest.onNpcMoved = MapWindow.showNpcMoved
 
 Forest.onInventoryChanged = function()
+    ToolsHeld.update(Forest.playerTile)
     MapWindow.showInventory()
     Highlights.followPlayer()
 end
@@ -211,7 +219,7 @@ for _, name in ipairs(require("src/game/game_ids").unresolved) do print(LOG_PREF
 Forest.start()
 
 -- The plugin's two hub pages. The ribbon page and the settings page.
-local SECTION_COLOUR = 0xF2C66DFF
+local SECTION_COLOUR = Colours.GOLD
 local SECTION_FONT = require("src/game/game_ids").resolve("Font", "CINZEL_18PT_BOLD") or id.Font.CINZEL_13PT_BOLD
 local SECTION_HEIGHT = 30 -- room for the 18pt heading
 local PARAGRAPH_GAP = 18 -- a blank line between the settings' how-to paragraphs
@@ -327,7 +335,7 @@ local pageControls = {} -- setting key -> what shows it on whichever pages are b
 -- Shows a setting's value on every page that has it, after a change elsewhere (another page, the map's sharing
 -- button or a restore).
 local function showSetting(key, source)
-    isSettingsWindowOpen()
+    forgetClosedSettingsWindow()
     local controls = pageControls[key]
     if controls == nil then return end
     for _, kept in ipairs(controls) do
@@ -369,7 +377,7 @@ local function showsTicked(row)
 end
 
 local function showEnabledStates()
-    isSettingsWindowOpen()
+    forgetClosedSettingsWindow()
     for _, other in ipairs(settingRows) do
         local controls = pageControls[other.key]
         if controls ~= nil and (other.under ~= nil or other.offWhen ~= nil) then
@@ -532,8 +540,8 @@ local function closeView(view)
 end
 
 -- The day's status on the ribbon page
-local DAILY_COMPLETE_COLOUR, DAILY_INCOMPLETE_COLOUR = 0x7DDC5AFF, SECTION_COLOUR
-local UNCLAIMED_COLOUR = 0xE0433AFF -- the map's red for an absent node still unclaimed today
+local DAILY_COMPLETE_COLOUR, DAILY_INCOMPLETE_COLOUR = Colours.GREEN, Colours.GOLD
+local UNCLAIMED_COLOUR = Colours.RED | 0xFF
 local DAILY_LINE_HEIGHT = 22
 -- The hub's page is narrow, so the ribbon page keeps PrettyUI's padding small and indents nothing.
 local PAGE_LAYOUT = { paddingLeft = 4, paddingRight = 4, startY = 6 }

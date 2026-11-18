@@ -4,7 +4,7 @@
 
 local Settings = {}
 
--- Each switch's key and default, in the order the settings page shows them.
+-- Each switch's key and default.
 local SWITCHES = {
     -- General
     { "scoutOpensInForest", false },  -- open the scout window on entering a forest

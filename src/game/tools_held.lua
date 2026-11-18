@@ -1,5 +1,5 @@
 -- Which puzzle tools the player has. An item tool counts in the backpack or worn (a burning log goes straight
--- to an empty hand). An NPC tool  counts once the info box or a dialogue says it is following the player. 
+-- to an empty hand). An NPC tool counts once the info box or a dialogue says it is following the player.
 
 local ForestFeatures = require("src/data/forest_features")
 local Forest = require("src/game/forest")
@@ -19,7 +19,7 @@ for _, toolPair in ipairs(ForestFeatures.tools) do
     if toolPair.toolItem ~= nil then itemOfSourceKey[sourceKey] = GameIds.resolve("Obj", toolPair.toolItem) end
 end
 
-local heldBefore = {} -- source key -> true: tools held when last asked
+local heldBefore = {} -- source key -> true: tools held at the last update
 local usedAt = {} -- source key -> the server tick its tool was used on its barrier
 
 -- Returns the barrier of sourceKey's puzzle if it still stands near playerTile.
@@ -35,32 +35,40 @@ local function barrierNear(sourceKey, playerTile)
     return nil
 end
 
--- Adds to held the tools just used on a barrier that has not opened yet.
-local function keepToolsBeingUsed(held, playerTile)
-    for sourceKey in pairs(heldBefore) do
-        if not held[sourceKey] and barrierNear(sourceKey, playerTile) then usedAt[sourceKey] = Forest.ticks end
-    end
-    local heldNow = {}
-    for sourceKey in pairs(held) do heldNow[sourceKey] = true end
-    heldBefore = heldNow
-    for sourceKey, tick in pairs(usedAt) do
-        local barrier = barrierOfSourceKey[sourceKey]
-        if Forest.doorsGone[barrier.key] or Forest.ticks - tick > OPENING_TICKS then
-            usedAt[sourceKey] = nil
-        else
-            held[sourceKey] = true
-        end
-    end
+-- Returns whether a tool used at tick is still opening its barrier.
+local function isOpening(sourceKey, tick)
+    return not Forest.doorsGone[barrierOfSourceKey[sourceKey].key] and Forest.ticks - tick <= OPENING_TICKS
 end
 
--- Returns the source keys of the puzzles whose tool the player has (source key -> true); playerTile: { x, z }.
-function ToolsHeld.sourceKeys(playerTile)
+-- Returns the tools in the backpack, worn or following, by source key.
+local function toolsCarried()
     local itemsHeld, held = Forest.itemsHeld(), {}
     for sourceKey, itemID in pairs(itemOfSourceKey) do
         if itemsHeld[itemID] then held[sourceKey] = true end
     end
     for sourceKey in pairs(Forest.following) do held[sourceKey] = true end
-    keepToolsBeingUsed(held, playerTile)
+    return held
+end
+
+-- Notes the tools just lost beside their barriers, on each step and inventory change; playerTile: { x, z }.
+function ToolsHeld.update(playerTile)
+    local held = toolsCarried()
+    for sourceKey in pairs(heldBefore) do
+        if not held[sourceKey] and barrierNear(sourceKey, playerTile) then usedAt[sourceKey] = Forest.ticks end
+    end
+    heldBefore = held
+    for sourceKey, tick in pairs(usedAt) do
+        if not isOpening(sourceKey, tick) then usedAt[sourceKey] = nil end
+    end
+end
+
+-- Returns the source keys of the puzzles whose tool the player has (source key -> true), counting a tool still
+-- opening its barrier.
+function ToolsHeld.sourceKeys()
+    local held = toolsCarried()
+    for sourceKey, tick in pairs(usedAt) do
+        if isOpening(sourceKey, tick) then held[sourceKey] = true end
+    end
     return held
 end
 

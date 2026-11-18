@@ -3,10 +3,14 @@
 
 local GameIds = {}
 
-GameIds.unresolved = {} -- "<kind>.<name>" for every name the game did not know
+GameIds.unresolved = {} -- "<kind>.<name>" for every name the game did not know, once each
+local noted = {}
 
 function GameIds.noteUnknown(kind, name)
-    GameIds.unresolved[#GameIds.unresolved + 1] = kind .. "." .. name
+    local key = kind .. "." .. name
+    if noted[key] then return end
+    noted[key] = true
+    GameIds.unresolved[#GameIds.unresolved + 1] = key
 end
 
 local function lookUp(kind, name)

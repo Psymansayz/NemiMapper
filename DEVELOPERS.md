@@ -24,7 +24,7 @@ dependency, see `plugin.json`). The `main` branch is the release; `dev` has the 
 | | `routes.lua` | Searches over the grid: the route to a target, the final route, the walk toward the centre. |
 | | `solve_plan.lua` | Chooses a plan's next stop from the shortest tour, and which keys and doors a tour needs. |
 | | `forest_stops.lua` | Turns found features into stops for the plans, and caches NAVIGATE's stops. |
-| | `tools_held.lua` | Which puzzle tools the player has. |
+| | `tools_held.lua` | Which puzzle tools the player has; `update` (on each step and inventory change) notes a tool used on its barrier. |
 | | `highlights.lua` | The 3D boxes, the beam over the route's target and the route drawn on the ground. |
 | | `model_bounds.lua` | Turns the saved model boxes into each placed feature's box. |
 | | `dialogue_text.lua` | Reads the info box and the NPC dialogue box, for follow messages and refusals. |
@@ -35,6 +35,7 @@ dependency, see `plugin.json`). The `main` branch is the release; `dev` has the 
 | | `scout_window.lua` | The scout window: node kinds found, counts, monsters left. |
 | | `full_forest_alert.lua` | The green flash and the click block on a 9/9 forest. |
 | | `sharing_button.lua` | The map title bar's sharing-mode button. |
+| | `colours.lua` | The green, gold and red the windows and the hub page share. |
 | | `status_text.lua` | A text that writes its content and colour only when they change. |
 | | `window_place.lua` | Saves and restores a window's place and size. |
 | `resources` | `*.png` | Icons for features and signs, and `zone_<x>_<z>.png` pictures of each template zone for the map. |
@@ -194,7 +195,7 @@ heights (`template_standing`) best match the heights read from the client, then 
 walkable tiles (`zone_walkability`), turned the same way. A zone whose turn matters but cannot be told yet makes the
 grid unsettled. Turned templates are cached and dropped five minutes after leaving.
 
-Searches cache data on the grid itself (`grid.steps`, `grid.stopSearches`), so a new grid is only swapped in when it
+Searches cache data on the grid itself (`grid.steps`, `grid.stopDistances`), so a new grid is only swapped in when it
 differs from the last (`ForestGrid.same`).
 
 ### Stops, plans and routes

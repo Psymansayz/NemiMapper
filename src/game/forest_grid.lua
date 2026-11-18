@@ -36,8 +36,7 @@ local function turnedTiles(values, quarterTurns)
 end
 
 -- Cache of each template zone's standing heights when turned: "x_z" -> [quarter turns] -> heights.
--- turnedTemplate's cache is dropped five minutes after leaving a forest to free up memory.
-local turnedTemplateStanding = {}
+local standingTurnsCache = {}
 
 -- Returns the clockwise quarter turns that best match the template zone sourceKey's standing heights to
 -- standing; none when two turns match equally well.
@@ -46,17 +45,17 @@ local turnedTemplateStanding = {}
 local function turnByStanding(sourceKey, standing)
     local template = TemplateStanding[sourceKey]
     if template == nil or standing == nil then return nil end
-    local turnedTemplates = turnedTemplateStanding[sourceKey]
-    if turnedTemplates == nil then
-        turnedTemplates = {}
-        for quarterTurns = 0, 3 do turnedTemplates[quarterTurns] = turnedTiles(template, quarterTurns) end
-        turnedTemplateStanding[sourceKey] = turnedTemplates
+    local standingTurns = standingTurnsCache[sourceKey]
+    if standingTurns == nil then
+        standingTurns = {}
+        for quarterTurns = 0, 3 do standingTurns[quarterTurns] = turnedTiles(template, quarterTurns) end
+        standingTurnsCache[sourceKey] = standingTurns
     end
     local bestTurns, bestAlike, tied = nil, -1, false
     for quarterTurns = 0, 3 do
-        local turnedTemplate, alike = turnedTemplates[quarterTurns], 0
+        local turnedStanding, alike = standingTurns[quarterTurns], 0
         for tileIndex = 1, ZONE_TILES do
-            if turnedTemplate[tileIndex] == standing[tileIndex] then alike = alike + 1 end
+            if turnedStanding[tileIndex] == standing[tileIndex] then alike = alike + 1 end
         end
         if alike > bestAlike then bestTurns, bestAlike, tied = quarterTurns, alike, false
         elseif alike == bestAlike then tied = true end
@@ -79,9 +78,9 @@ end
 -- Cache of each template zone in every turn: "x_z" -> { ground, turnMatters }. ground: by quarter turns, its
 -- walkable tiles as flat x, z offset pairs from the south-west corner. turnMatters: whether its turns differ in
 -- which tiles are walkable; one that does not (open ground) cannot be turned wrongly.
-local turnedTemplates = {}
-local function turnedTemplate(sourceKey)
-    local template = turnedTemplates[sourceKey]
+local groundTurnsCache = {}
+local function groundTurns(sourceKey)
+    local template = groundTurnsCache[sourceKey]
     if template ~= nil then return template end
     local tiles = groundTiles(sourceKey)
     template = { ground = {}, turnMatters = false }
@@ -96,7 +95,7 @@ local function turnedTemplate(sourceKey)
         end
         template.ground[quarterTurns] = ground
     end
-    turnedTemplates[sourceKey] = template
+    groundTurnsCache[sourceKey] = template
     return template
 end
 
@@ -112,7 +111,7 @@ function ForestGrid.build(zones, bounds, standingByZone)
     }, Grid)
     for index, zone in ipairs(zones) do
         local zoneKey, sourceKey = zone.x .. "," .. zone.z, zone.sourceX .. "_" .. zone.sourceZ
-        local template = turnedTemplate(sourceKey)
+        local template = groundTurns(sourceKey)
         local turns = turnByStanding(sourceKey, standingByZone[zoneKey])
         if turns == nil and template.turnMatters then grid.settled = false end
         turns = turns or 0
@@ -159,7 +158,7 @@ end
 -- Drops the template zones' turned tiles and standing heights, which every forest reuses, once no forest is
 -- likely soon. The next grid makes them again from the data, which is why the walkability rows are kept.
 function ForestGrid.forgetTemplates()
-    turnedTemplates, turnedTemplateStanding = {}, {}
+    groundTurnsCache, standingTurnsCache = {}, {}
 end
 
 return ForestGrid

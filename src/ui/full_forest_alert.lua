@@ -1,6 +1,6 @@
 -- The alert when a forest has every node kind (9/9 in the scout window) or, by its setting, every kind still
 -- unclaimed today, given once per forest entry. 
--- The screen flashes green for ALERT_SECONDS, a second on and a second off, through a transparent rectangle
+-- The screen flashes green for ALERT_SECONDS, a second on and a second off, through a transparent rectangle.
 -- A nearly invisible rectangle takes the mouse's clicks, with the scout window raised above it.
 -- Alerts can end early via a button on the scout window.
 
@@ -86,7 +86,8 @@ end
 -- Returns whether the forest should trigger the alert
 function FullForestAlert.forestIsComplete(kinds, missedKinds)
     if kinds >= KINDS_FOR_ALERT then return true end
-    if not Settings.alertOnNeededNodes then return false end
+    -- which nodes the forest has is known only once the search settles
+    if not Settings.alertOnNeededNodes or Forest.isSearching then return false end
     local needed = 0
     for _, node in ipairs(ForestFeatures.nodes) do
         if not Forest.isNodeClaimed(node.key) then

@@ -5,9 +5,6 @@ local Routes = require("src/game/routes")
 local SolvePlan = {}
 
 local INFINITE = math.huge
--- Searches from stops cached on a grid before the cache is cleared. A door opening changes the
--- blocked tiles of every stop's search, so the cache is cleared then; this cap is a safeguard.
-local SEARCHES_KEPT = 64
 
 -- Returns tiles as a set of grid indexes.
 local function tilesOf(grid, tiles)
@@ -19,37 +16,42 @@ local function tilesOf(grid, tiles)
     return indexes
 end
 
--- Returns a search from startTiles.
--- Stops stay put, so replanning after the player moves, takes a key or claims a node only searches from the player.
-local function searchFromStop(grid, startTiles, blocked, doorsKey)
-    local parts = {}
-    for _, tile in ipairs(startTiles) do parts[#parts + 1] = tile.x .. "," .. tile.z end
-    local blockedIndexes = {}
-    for index in pairs(blocked) do blockedIndexes[#blockedIndexes + 1] = index end
-    table.sort(blockedIndexes)
-    local key = table.concat(parts, " ") .. "|" .. table.concat(blockedIndexes, " ")
-    local searches = grid.stopSearches
-    if searches == nil or searches.doorsKey ~= doorsKey then
-        searches = { count = 0, byKey = {}, doorsKey = doorsKey }
-        grid.stopSearches = searches
-    end
-    local found = searches.byKey[key]
-    if found == nil then
-        if searches.count >= SEARCHES_KEPT then
-            searches.byKey, searches.count = {}, 0
-        end
-        found = Routes.search(grid, startTiles, blocked, true)
-        searches.byKey[key], searches.count = found, searches.count + 1
-    end
-    return found
-end
-
 -- Returns the distances from a search's start to each stop, avoiding the blocked tiles.
 local function distancesFrom(grid, found, stops, blocked)
     local distances = {}
     for index, stop in ipairs(stops) do
         local _, distance = Routes.nearest(found, Routes.tilesRound(grid, stop, blocked))
         distances[index] = distance and distance + 1 or INFINITE
+    end
+    return distances
+end
+
+local function stopKey(stop) return stop.kind .. stop.x .. "," .. stop.z end
+
+-- Returns the distances from a stop to each of stops, searching only when one is not known.
+-- Stops stay put, so replanning after the player moves, takes a key or claims a node only searches from the player.
+-- With the same barriers shut (doorsKey), a stop's search always has the same blocked tiles (blockedFor(stop)), so
+-- distances are kept by stop until a barrier opens.
+local function distancesFromStop(grid, stop, stops, doorsKey, blockedFor)
+    local cache = grid.stopDistances
+    if cache == nil or cache.doorsKey ~= doorsKey then
+        cache = { doorsKey = doorsKey, byStop = {} }
+        grid.stopDistances = cache
+    end
+    local known = cache.byStop[stopKey(stop)]
+    if known == nil then
+        known = {}
+        cache.byStop[stopKey(stop)] = known
+    end
+    local distances = {}
+    for index, target in ipairs(stops) do
+        distances[index] = known[stopKey(target)]
+        if distances[index] == nil then
+            local blocked = blockedFor(stop)
+            distances = distancesFrom(grid, Routes.search(grid, stop.tiles, blocked, true), stops, blocked)
+            for position, each in ipairs(stops) do known[stopKey(each)] = distances[position] end
+            return distances
+        end
     end
     return distances
 end
@@ -85,10 +87,7 @@ local function plan(grid, player, stops, alwaysBlocked, playerSearch)
     local doorsKey = table.concat(shutIndexes, " ")
     if playerSearch == nil then playerSearch = Routes.search(grid, { player }, allShut) end
     local base = { [0] = distancesFrom(grid, playerSearch, stops, allShut) }
-    for index, stop in ipairs(stops) do
-        local blocked = blockedBut(stop)
-        base[index] = distancesFrom(grid, searchFromStop(grid, stop.tiles, blocked, doorsKey), stops, blocked)
-    end
+    for index, stop in ipairs(stops) do base[index] = distancesFromStop(grid, stop, stops, doorsKey, blockedBut) end
     -- Distances with the doors visited so far open
     local joinedByMask = {}
     local function joined(visitedMask)
