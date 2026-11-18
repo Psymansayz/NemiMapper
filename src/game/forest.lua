@@ -107,7 +107,7 @@ for _, task in ipairs(ForestFeatures.trinksTasks) do list(task, "task", 3) end
 for _, node in ipairs(ForestFeatures.nodes) do list(node, "node", 4) end
 
 -- What the forest has shown so far. Features stay known out of sight; only a change at their tile removes them.
-local locationsFound = {} -- packed coordinate -> { feature, x, z }
+local locationsFound = {} -- packed coordinate -> { feature, x, z }, scanned or announced
 local npcsFound = {}      -- [n] = { feature, x, z }: where each one's marker is
 local monstersSeen = {}   -- entity uid -> true, so a monster back in view is not a new spawn
 local foundChanged = false
@@ -373,7 +373,7 @@ end
 -- announcement has passed, scans find the forest instead. A server tick with nothing new completes the announcement
 -- and ends the search. Later events at those tiles are changes (a barrier cut, a key taken). Nodes are announced as
 -- their MultiLoc (`addedAs`).
-local announced = {}      -- packed coordinate -> entry of the feature announced there, as in `locationsFound`
+local anyAnnounced = false -- a feature was announced, so the locations are not scanned
 local announcedInBurst = 0 -- features announced in the first burst
 local announcedSinceTick = 0
 local announcementsEnded = false
@@ -411,6 +411,7 @@ local function noteNpc(npcEntity)
     npcsFound[#npcsFound + 1] = {
         feature = feature, x = coord.x + 0.5, z = coord.z + 0.5, width = 1, length = 1, isNpc = true,
         npcID = npcEntity.configID, -- to find the live entity for the highlight
+        bounds = ModelBounds.ofNpc(feature),
     }
     foundChanged = true
 end
@@ -459,7 +460,7 @@ local function scan()
     -- only a find or new change restarts the settling
     local changedBefore = foundChanged
     foundChanged = false
-    local scansLocations = announcementMissed or next(announced) == nil
+    local scansLocations = announcementMissed or not anyAnnounced
     for _, location in ipairs(scansLocations and LocList.All() or NO_LOCATIONS) do
         local feature = featureOfLocID[location.configID]
         if feature ~= nil then
@@ -467,15 +468,8 @@ local function scan()
             local packedCoord = coord:ToPacked()
             local known = locationsFound[packedCoord]
             if known == nil or known.feature ~= feature then
-                local entry = locationEntry(feature, location.configID, coord, location.rotationType, location.width,
-                    location.length, location.shapeType)
-                -- first seen: fill in its announced entry, so plans and routes keep the same object
-                local announcedEntry = announced[packedCoord]
-                if known == nil and announcedEntry ~= nil and announcedEntry.feature == feature then
-                    for field, value in pairs(entry) do announcedEntry[field] = value end
-                    entry = announcedEntry
-                end
-                locationsFound[packedCoord] = entry
+                locationsFound[packedCoord] = locationEntry(feature, location.configID, coord, location.rotationType,
+                    location.width, location.length, location.shapeType)
                 foundChanged = true
             end
         end
@@ -486,13 +480,9 @@ local function scan()
     foundChanged = foundChanged or changedBefore
 end
 
--- Returns every location found: those scanned, plus those announced but not yet loaded by the client.
 local function locationEntries()
     local entries = {}
     for _, entry in pairs(locationsFound) do entries[#entries + 1] = entry end
-    for packedCoord, entry in pairs(announced) do
-        if locationsFound[packedCoord] == nil then entries[#entries + 1] = entry end
-    end
     return entries
 end
 
@@ -514,8 +504,11 @@ local function buildGrid()
     if ForestGrid.same(builtGrid, grid) then return end
     builtGrid, Forest.zoneTurns = grid, grid.turns
     if grid.settled or Forest.ticks >= gridDueTick then Forest.grid = grid end
-    -- every zone's heights are in, so the draw distance raised to load them can come down
-    if Forest.grid == grid and (not restoreAfterScans or settlingTicksLeft == 0) then
+end
+
+-- Puts the player's draw distance back once the grid is in use, and after a reload once the scans settle too.
+local function restoreDrawDistanceWhenDone()
+    if Forest.grid ~= nil and (not restoreAfterScans or settlingTicksLeft == 0) then
         restoreAfterScans = false
         DrawDistance.restore()
     end
@@ -657,7 +650,7 @@ local function forgetForest()
     Forest.grid, builtGrid, Forest.zoneTurns = nil, nil, nil -- built by the publish after the first scan on entering
     Forest.playerTile, Forest.entryTile = nil, nil
     Forest.monstersSpawned = 0
-    locationsFound, npcsFound, monstersSeen, taskItemsHeld, itemsHeldNow = {}, {}, {}, {}, nil
+    npcsFound, monstersSeen, taskItemsHeld, itemsHeldNow = {}, {}, {}, nil
     npcsArrived, searchEnded = false, false
 end
 
@@ -669,7 +662,8 @@ local function stopWatching()
     Event.NPCEntityAdded.Unsubscribe(SUBSCRIPTION)
     Event.InventoryUpdated.Unsubscribe(SUBSCRIPTION)
     Event.PlayerEntityRemoved.Unsubscribe(PLAYERS_SUBSCRIPTION)
-    announced = {}
+    -- also announced before entering, so dropped whether entered or not
+    locationsFound, anyAnnounced = {}, false
     DrawDistance.restore()
     if Forest.isInside then
         Forest.isInside, Forest.isSearching = false, false
@@ -681,11 +675,7 @@ end
 
 -- Drops doors when annother player opens them.
 local function dropAt(packedCoord, shapeType)
-    local announcedEntry, known = announced[packedCoord], locationsFound[packedCoord]
-    if announcedEntry ~= nil and announcedEntry.shapeType == shapeType then
-        announced[packedCoord] = nil
-        foundChanged = true
-    end
+    local known = locationsFound[packedCoord]
     if known ~= nil and known.shapeType == shapeType then
         locationsFound[packedCoord] = nil
         foundChanged = true
@@ -702,12 +692,14 @@ local function onLocationAdded(event)
     -- a config's size is unrotated; a quarter turn swaps it
     if event.rotationType % 2 == 1 then width, length = length, width end
     local entry = locationEntry(feature, config.id, coord, event.rotationType, width, length, event.shapeType)
-    announced[packedCoord] = entry
+    -- a change at a known tile updates its entry in place, so plans and routes keep the same object
     local known = locationsFound[packedCoord]
     if known ~= nil then
         for field, value in pairs(entry) do known[field] = value end
+    else
+        locationsFound[packedCoord] = entry
     end
-    foundChanged = true
+    anyAnnounced, foundChanged = true, true
     if announcingTicksLeft > 0 and not announcementsEnded then
         announcedInBurst, announcedSinceTick = announcedInBurst + 1, announcedSinceTick + 1
     end
@@ -806,10 +798,6 @@ local function onServerTick()
     if settlingTicksLeft > 0 then
         settlingTicksLeft = settlingTicksLeft - 1
         scan()
-        if settlingTicksLeft == 0 and restoreAfterScans and Forest.grid ~= nil then
-            restoreAfterScans = false
-            DrawDistance.restore()
-        end
     elseif npcsArrived then
         scanNpcs()
     end
@@ -828,14 +816,11 @@ local function onServerTick()
     -- An unsettled grid held back is used once if the forest doesn't settle after gridDueTick.
     if Forest.grid == nil and builtGrid ~= nil and Forest.ticks >= gridDueTick then
         Forest.grid, foundChanged = builtGrid, true
-        if not restoreAfterScans or settlingTicksLeft == 0 then
-            restoreAfterScans = false
-            DrawDistance.restore()
-        end
     end
     -- Heights read by a scan change the grid without a find
     if foundChanged or gridStale then publish() end
     followPlayer()
+    restoreDrawDistanceWhenDone()
 end
 
 -- Listens for added locations from the region's creation
@@ -843,7 +828,7 @@ end
 local function watchRegion(isNew)
     arrivalTicksLeft = ARRIVAL_TICKS
     restoreAfterScans, announcementMissed = not isNew, not isNew
-    announced, announcedInBurst, announcedSinceTick, announcementsEnded = {}, 0, 0, false
+    anyAnnounced, announcedInBurst, announcedSinceTick, announcementsEnded = false, 0, 0, false
     announcingTicksLeft = isNew and ANNOUNCING_TICKS or 0
     Event.ServerLogic.Subscribe(SUBSCRIPTION, onServerTick)
     Event.LocAdded.Subscribe(SUBSCRIPTION, onLocationAdded)

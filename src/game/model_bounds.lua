@@ -1,5 +1,5 @@
--- The box round a node's, key's, door's or the Pahtli plant's model, from the saved boxes (src/data/model_bounds.lua),
--- for the world's highlights.
+-- The box round a node's, key's, door's, the Pahtli plant's or a highlighted NPC's model, from the saved boxes
+-- (src/data/model_bounds.lua), for the world's highlights.
 
 local Data = require("src/data/model_bounds")
 local ForestFeatures = require("src/data/forest_features")
@@ -10,13 +10,19 @@ local ModelBounds = {}
 local HALF_TILE = 256 -- fine units
 
 -- location id -> its box, unturned; the data's table is emptied once converted, as require keeps it for good.
--- Every location name of a feature takes the box of its base location..
+-- Every location name of a feature takes the box of its base location.
 local boxOf = {}
+-- NPC feature -> its box, from the middle of its tile.
+local npcBoxOf = {}
 local function listBoxes(feature)
-    local box = Data[feature.addedAs or ""] or Data[(feature.locations or {})[1] or ""]
-    if box == nil then return end
+    if feature.npcs ~= nil then
+        local box = Data[feature.npcs[1]]
+        npcBoxOf[feature] = { x = box[1], X = box[2], z = box[3], Z = box[4], height = box[5] }
+        return
+    end
+    local box = Data[feature.addedAs or ""] or Data[feature.locations[1]]
     local names = {}
-    for _, name in ipairs(feature.locations or {}) do names[#names + 1] = name end
+    for _, name in ipairs(feature.locations) do names[#names + 1] = name end
     names[#names + 1] = feature.addedAs
     for _, name in ipairs(names) do
         local locID = GameIds.resolve("Loc", name)
@@ -36,7 +42,6 @@ for name in pairs(Data) do Data[name] = nil end
 -- as turned.
 function ModelBounds.of(locID, rotation, width, length)
     local box = boxOf[locID]
-    if box == nil then return nil end
     local west, east, south, north = box[1], box[2], box[3], box[4]
     -- a quarter turn takes the box's south side to its west, as the game turns a location's model
     for _ = 1, rotation % 4 do
@@ -45,6 +50,11 @@ function ModelBounds.of(locID, rotation, width, length)
     -- the box is from the middle of the tiles it stands on, the highlight's from its south-west tile's centre
     local middleX, middleZ = (width - 1) * HALF_TILE, (length - 1) * HALF_TILE
     return { x = west + middleX, X = east + middleX, z = south + middleZ, Z = north + middleZ, height = box[5] }
+end
+
+-- Returns an NPC feature's box, as ModelBounds.of gives a location's.
+function ModelBounds.ofNpc(feature)
+    return npcBoxOf[feature]
 end
 
 return ModelBounds
