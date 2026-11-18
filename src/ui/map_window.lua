@@ -2,6 +2,7 @@
 -- map and the puzzle legend below it.
 
 local IconSizes = require("src/data/icon_sizes")
+local Colours = require("src/ui/colours")
 local ForestFeatures = require("src/data/forest_features")
 local Forest = require("src/game/forest")
 local GameIds = require("src/game/game_ids")
@@ -81,10 +82,10 @@ local FINAL_ROUTE_COLOUR = 0xF4F1E6FF
 local PLAYER_COLOUR = 0xFF3B30FF
 local TEXT_COLOUR = 0xFFFFFFFF
 local HEADING_COLOUR = 0xE9B93EFF
-local HINT_COLOUR = 0xF2C66DFF -- "Walk to find"
+local HINT_COLOUR = Colours.GOLD -- "Walk to find"
 local HOVER_SCALE = 1.25 -- a map icon under the mouse grows by this, about its centre
 local HOVER_COLOUR = 0xFFFFFFFF -- outline of a clickable row or pair under the mouse
-local MISSING_COLOUR = 0xE0433A70 -- translucent red over a node absent from this forest but unclaimed today
+local MISSING_COLOUR = Colours.RED | 0x70 -- translucent red over a node absent from this forest but unclaimed today
 -- The game's skill icons for the legend's symbols, where <S> is the skill in upper case.
 -- The SKILL_<S> sprites are the daily tasks' set, not these.
 local SKILL_SPRITE_PATTERN = "HITMARK_ICON_SKILL_<S>"
@@ -122,7 +123,7 @@ local NAME_TO_ROW = 0.5 -- a name's font is at most this share of its row, so it
 local parts = nil
 local showLegendStates -- defined below
 
--- Values worked out once per redraw: the view, the tools held and the puzzle pairs shown.
+-- Values worked out once per redraw: the view, the tools held, the puzzle pairs and the legends shown.
 local redraw = {}
 local function newRedraw()
     redraw = {}
@@ -318,7 +319,7 @@ end
 -- Draws a route (its corner tiles, in order) on the routes canvas. 
 local MITRE_LEAST = 0.001 -- when the normals sum to less than this, the route doubled back and gets no mitre
 local MITRE_LONGEST = 3 -- in half widths; a sharp turn's mitre grows without limit, so it is capped here
-local QUAD_TRIANGLES = { { 1, 2, 3 }, { 1, 3, 4 }, { 3, 2, 1 }, { 4, 3, 1 } }
+local QUAD_TRIANGLES = { { 1, 2, 3 }, { 1, 3, 4 } }
 local function pixel(value) return math.floor(value + 0.5) end
 local function drawRoute(tiles, colour, joinsAtStart)
     local half = math.max(2, ROUTE_WIDTH * parts.frame.iconScale) / 2
@@ -363,7 +364,6 @@ local function drawRoute(tiles, colour, joinsAtStart)
     for position = 1, #points - 1 do
         corners[1], corners[2] = edges[position].left, edges[position].right
         corners[3], corners[4] = edges[position + 1].right, edges[position + 1].left
-        -- Both windings, as the canvas's fill direction is unknown.
         for _, triangle in ipairs(QUAD_TRIANGLES) do
             local first, second, third = corners[triangle[1]], corners[triangle[2]], corners[triangle[3]]
             parts.routes:AddTriangle(first[1], first[2], second[1], second[2], third[1], third[2], colour)
@@ -417,7 +417,7 @@ end
 local function toolsHeld()
     if redraw.held == nil then
         local player = Forest.isInside and Forest.playerTile or nil
-        redraw.held = player and ToolsHeld.sourceKeys(player) or {}
+        redraw.held = player and ToolsHeld.sourceKeys() or {}
     end
     return redraw.held
 end
@@ -724,7 +724,7 @@ waitForFinalRoute = function()
     finalRouteWaiting = true
     Event.ServerLogic.Subscribe(FINAL_ROUTE_SUBSCRIPTION, function()
         stopWaitingForFinalRoute()
-        if not isOpen() or parts.frame == nil then return end
+        if not isLaidOut() then return end
         newRedraw()
         if Forest.grid ~= nil and Forest.entryTile ~= nil and not Forest.isSearching and view().finalRoute
             and not routeChosen() then
@@ -1049,10 +1049,15 @@ end
 
 -- Returns whether the puzzle legend shows: by its setting, while barriers stand and it has a puzzle to show.
 local function puzzleLegendShown()
+    if redraw.puzzleLegendShown ~= nil then return redraw.puzzleLegendShown end
     if not view().puzzleLegend then return false end
     -- The minimum size is worked out before the window and its pairs exist, so the pairs count only once made.
-    if parts ~= nil and parts.puzzlePairs ~= nil and #shownPuzzlePairs() == 0 then return false end
-    return Forest.bounds == nil or Forest.isSearching or Forest.barriersLeft()
+    if parts == nil or parts.puzzlePairs == nil then
+        return Forest.bounds == nil or Forest.isSearching or Forest.barriersLeft()
+    end
+    redraw.puzzleLegendShown = #shownPuzzlePairs() > 0
+        and (Forest.bounds == nil or Forest.isSearching or Forest.barriersLeft())
+    return redraw.puzzleLegendShown
 end
 
 local layoutFitting -- defined below fitWindowTo
@@ -1086,18 +1091,23 @@ local LEGEND_LISTS = { ForestFeatures.nodes, ForestFeatures.trinksTasks }
 -- Returns the node legend's rows shown, its lists shown (the tasks' heading goes with any task row shown), and the rows
 -- it leaves out (claimed nodes, tasks not active) as a string to notice a change by.
 local function legendRowsShown(shows)
-    local rows, taskRows, hidden = 0, 0, {}
-    for listIndex, list in ipairs(LEGEND_LISTS) do
-        for _, feature in ipairs(list) do
-            if legendRowShown(feature, listIndex, shows) then
-                rows = rows + 1
-                if listIndex == 2 then taskRows = taskRows + 1 end
-            else
-                hidden[#hidden + 1] = feature.key
+    local counted = redraw.legendRows
+    if counted == nil or counted.shows ~= shows then
+        local rows, taskRows, hidden = 0, 0, {}
+        for listIndex, list in ipairs(LEGEND_LISTS) do
+            for _, feature in ipairs(list) do
+                if legendRowShown(feature, listIndex, shows) then
+                    rows = rows + 1
+                    if listIndex == 2 then taskRows = taskRows + 1 end
+                else
+                    hidden[#hidden + 1] = feature.key
+                end
             end
         end
+        counted = { rows, taskRows > 0 and #LEGEND_LISTS or 1, table.concat(hidden, " "), shows = shows }
+        redraw.legendRows = counted
     end
-    return rows, taskRows > 0 and #LEGEND_LISTS or 1, table.concat(hidden, " ")
+    return counted[1], counted[2], counted[3]
 end
 
 -- Returns whether the node legend shows: by its setting, while it has a row to show. With every node claimed and
@@ -1874,7 +1884,7 @@ local function rebuild()
     local PrettyUI, pluginLayer = parts.PrettyUI, parts.pluginLayer
     MapWindow.close()
     MapWindow.open(PrettyUI, pluginLayer, hidden)
-    if not isOpen() or parts.frame == nil then return end
+    if not isLaidOut() then return end
     fitWindowTo(mapSize)
     if routeShown ~= nil or solving or mapping then chooseRoute(routeShown, solving, mapping) end
 end
@@ -2020,7 +2030,7 @@ end
 -- Called when a found NPC (entry) moves: its marker follows, and the route is redrawn when it leads to that NPC.
 -- A plan keeps its target.
 function MapWindow.showNpcMoved(entry)
-    if not isOpen() or parts.frame == nil then return end
+    if not isLaidOut() then return end
     newRedraw()
     placeMarkers()
     if parts.routeDrawn ~= nil and parts.routeDrawn.target == entry then drawRoutes() end
@@ -2029,7 +2039,7 @@ end
 -- Called when the backpack or worn items change without a step: only the tools held can have
 -- changed what the map shows.
 function MapWindow.showInventory()
-    if not isOpen() or parts.frame == nil then return end
+    if not isLaidOut() then return end
     newRedraw()
     local heldChanged, routesDrawn = showHeldChange()
     if heldChanged and not routesDrawn and routeChosen() then drawRoutes(true) end
@@ -2038,7 +2048,7 @@ end
 -- Called when the forest is left: it is gone, so the map shows none entered.
 function MapWindow.showForestLeft()
     finalRouteOf = nil
-    if not isOpen() or parts.frame == nil then return end
+    if not isLaidOut() then return end
     dropRouteChoice()
     showForest()
     showLegendStates()
@@ -2046,7 +2056,7 @@ end
 
 -- Called when the player's tile changes: the player marker and the routes follow.
 function MapWindow.showPlayer()
-    if not isOpen() or parts.frame == nil then return end
+    if not isLaidOut() then return end
     newRedraw()
     showPlayer()
     local heldChanged, routesDrawn = showHeldChange()
@@ -2063,7 +2073,7 @@ end
 
 -- Called when a route setting changes: the final route on the map, or the chosen route on the ground.
 function MapWindow.showRoutes()
-    if not isOpen() or parts.frame == nil then return end
+    if not isLaidOut() then return end
     newRedraw()
     drawRoutes()
 end
@@ -2084,7 +2094,7 @@ end
 -- Called when a map display setting changes.
 -- The legends, header and buttons may come or go, so the frame is laid out again.
 function MapWindow.showSettings()
-    if not isOpen() or parts.frame == nil then return end
+    if not isLaidOut() then return end
     -- A shared map shows the final route.
     -- A chosen route would replace it, and NAVIGATE's or SOLVE's would have no button left to turn it off.
     if Settings.mapSharingMode then dropRouteChoice() end
@@ -2108,7 +2118,7 @@ function MapWindow.showSettings()
 end
 
 function MapWindow.startMapping()
-    if not isOpen() or parts.frame == nil or parts.mapping or not view().mapRoute then return end
+    if not isLaidOut() or parts.mapping or not view().mapRoute then return end
     chooseRoute(nil, false, true)
 end
 

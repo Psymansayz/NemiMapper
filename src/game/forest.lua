@@ -42,7 +42,7 @@ Forest.zoneTurns = nil  -- zone index -> quarter turns, as last worked out, sett
 Forest.openings = {}    -- [n] = { x, z }: the mouth of each opening (entrance, exit)
 Forest.standingByZone = {}  -- "x,z" of a zone -> what stands on its tiles (src/game/standing_heights.lua);
                             -- shows which way the zone was turned
-Forest.found = {}       -- [n] = { feature, x, z, width, length', isUsed }: centre in tiles, size, and for a node
+Forest.found = {}       -- [n] = { feature, x, z, width, length, isUsed }: centre in tiles, size, and for a node
                         -- whether it was used today; drawn in this order
 Forest.countOf = {}     -- feature key -> how many were found
 Forest.doorsGone = {}   -- barrier key -> true once a found barrier is gone (its puzzle is done)
@@ -262,7 +262,7 @@ function Forest.currentTask()
         parts[index] = { what = part.what, count = count, of = part.of }
         done = done and count >= part.of
     end
-    -- the items held this tick (Forest.itemsHeld).
+    -- a forest task (the Pahtli plant) has no parts and is done once its item is held
     local backpack = Inventory.Find(config.Inv.INV.id)
     for _, forestTask in ipairs(ForestFeatures.trinksTasks) do
         local itemID = doneItemOf[forestTask]
@@ -334,7 +334,7 @@ local function noteFollowing(sourceKey)
     foundChanged = true
 end
 
--- Notes a follower when texts indicate it is following the player or refuses due to following annother player.
+-- Notes a follower when texts indicate it is following the player or refuses due to following another player.
 local function noteFollowTexts(shownTexts)
     local texts = {}
     for index, text in ipairs(shownTexts) do texts[index] = (text:gsub("<br>", " "):gsub("\194\160", " ")) end
@@ -493,9 +493,8 @@ end
 -- the unturned zones of the first ticks, while the zones load.
 local GRID_WAIT_TICKS = 6 -- about four seconds; at High draw distance (raised on entering) the zones load in 3 ticks
 local builtGrid = nil -- the last grid built, held back from Forest.grid until settled or due
--- With the plugin reloaded inside a forest, the server's announcement has passed, so only the scans find its nodes, keys
--- and doors: the draw distance raised on entering stays up until they settle as well as the grid, as the client
--- lets far squares go below Medium. Otherwise it comes down as soon as the grid settles.
+-- With the plugin reloaded inside a forest, only the scans find its nodes, keys and doors, so the draw distance
+-- stays up until they settle as well as the grid, as the client lets far squares go below Medium.
 local restoreAfterScans = false
 local gridDueTick = 0 -- the server tick from which an unsettled grid is used
 local function buildGrid()
@@ -536,11 +535,8 @@ local function publish()
         end
     end
     Forest.found, Forest.countOf = found, countOf
-    -- The grid is rebuilt with its changed inputs, and with any zones' heights read since.
-    if gridStale then
-        readStanding()
-        buildGrid()
-    end
+    -- the scan has just read the heights
+    if gridStale then buildGrid() end
     if Forest.onChanged then Forest.onChanged() end
 end
 
@@ -673,7 +669,7 @@ local function stopWatching()
     end
 end
 
--- Drops doors when annother player opens them.
+-- Drops doors when another player opens them.
 local function dropAt(packedCoord, shapeType)
     local known = locationsFound[packedCoord]
     if known ~= nil and known.shapeType == shapeType then
@@ -790,7 +786,9 @@ local function onServerTick()
             if isForest == false or arrivalTicksLeft <= 0 then stopWatching() end
             return
         end
-        enter(readRegion())
+        local region = readRegion()
+        if region == nil then return end
+        enter(region)
     end
     -- While the forest settles, the zones' heights and the NPCs are read each tick, and the locations too until
     -- something is announced; after that the locations' changes come as events, and NPCs are looked for when some

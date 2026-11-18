@@ -132,7 +132,7 @@ ForestFeatures.monstersAtMost = 25
 
 -- Trinks gives this many tasks a day.
 ForestFeatures.tasksADay = 3
--- Data for tracking trink's tasks.
+-- Data for tracking Trinks' tasks.
 -- The Pahtli plant's task counts nothing: the fruit held shows it done.
 local NPCS, LOCATIONS = "RAID1_GOEBIE_NPC_SUBTASK", "RAID1_GOEBIE_LOC_SUBTASK"
 ForestFeatures.trinksDailyTasks = {

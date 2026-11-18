@@ -9,6 +9,7 @@ local Settings = require("src/data/settings")
 local WindowPlace = require("src/ui/window_place")
 local FullForestAlert = require("src/ui/full_forest_alert")
 local StatusText = require("src/ui/status_text")
+local Colours = require("src/ui/colours")
 
 local ScoutWindow = {}
 
@@ -24,11 +25,11 @@ local UNBLOCK_SUBSCRIPTION = "nemi_mapper_scout_unblock"
 -- Marks a node known only from the rotation. It is kept short, as it sets the minimum width.
 local UNSEEN_SUFFIX = " (unseen)"
 local TITLE_AND_BORDER = 40 -- a PrettyUI window's title bar (32) and bottom border (8)
-local COMPLETE_COLOUR = 0x7DDC5AFF
-local INCOMPLETE_COLOUR = 0xF2C66DFF
+local COMPLETE_COLOUR = Colours.GREEN
+local INCOMPLETE_COLOUR = Colours.GOLD
 local NODE_COLOUR = 0xFFFFFFFF
 local ABSENT_COLOUR = 0xFFFFFF4D -- dimmed like the map's legend (0.3)
-local MISSING_COLOUR = 0xE0433A99 -- the map's red for an absent node still unclaimed today, dimmed
+local MISSING_COLOUR = Colours.RED | 0x99 -- dimmed
 local COUNT_FONT = GameIds.resolve("Font", "MUSEO_SANS_27PT_BOLD") or id.Font.MUSEO_SANS_13PT_BOLD
 -- A text has only one font, so "monsters left" is two texts on one line: a larger bold number, right-aligned in the
 -- width of the highest possible count, then the words.
@@ -78,11 +79,9 @@ local function showCounts()
     local kinds, _, missed, missedKinds = Forest.scoutCounts()
     local missedOf = {}
     for _, feature in ipairs(missed) do missedOf[feature.key] = (missedOf[feature.key] or 0) + 1 end
-    -- The count goes green on a 9/9 forest, or, with the alert set to every node still needed, once the search has
-    -- settled with all of them in the forest, by the alert's own test.
+    -- The count goes green on a 9/9 forest, or when the alert's own test passes with it set to every node still needed.
     local complete = kinds >= #ForestFeatures.nodes
-        or Settings.alertOnNeededNodes and not Forest.isSearching
-        and FullForestAlert.forestIsComplete(kinds, missedKinds)
+        or Settings.alertOnNeededNodes and FullForestAlert.forestIsComplete(kinds, missedKinds)
     setText(parts.countText, kinds .. (kinds == 1 and " Node" or " Nodes"),
         complete and COMPLETE_COLOUR or INCOMPLETE_COLOUR)
     -- Locations arrive over the forest's first server ticks, so the count can rise until the search settles.
@@ -123,12 +122,12 @@ local function widthNeeded(PrettyUI, numberWidth, wordsWidth, isBlocking)
     return widest + PADDING * 2 + WINDOW_EDGE_WIDTH
 end
 
--- Opening it again brings it to the front. onUnblock ends the full-forest alert.
--- isBlocking shows the unblock button at the top.
-local openWith -- the last open's arguments, to rebuild the window with the unblock button
-function ScoutWindow.open(PrettyUI, pluginLayer, onOpenMap, onUnblock, isBlocking)
-    openWith = { PrettyUI, pluginLayer, onOpenMap, onUnblock }
+-- Opening it again brings it to the front. While the full-forest alert blocks the game, it has the unblock button.
+local openedWith = nil -- the last open's arguments, to rebuild the window with the unblock button
+function ScoutWindow.open(PrettyUI, pluginLayer, onOpenMap)
+    openedWith = { PrettyUI = PrettyUI, pluginLayer = pluginLayer, onOpenMap = onOpenMap }
     if isOpen() then return parts.window:Show() end
+    local isBlocking = FullForestAlert.isBlocking()
     local numberWidth = monsterNumberWidth()
     local wordsWidth = config.Font.FromID(TEXT_FONT):GetStringWidth(MONSTER_WORDS) + 4
     local minimumWidth = widthNeeded(PrettyUI, numberWidth, wordsWidth, isBlocking)
@@ -145,7 +144,7 @@ function ScoutWindow.open(PrettyUI, pluginLayer, onOpenMap, onUnblock, isBlockin
     parts.countText = line(window:AddTitle({ text = "", font = COUNT_FONT, height = COUNT_HEIGHT, marginBottom = 0 }))
     -- PrettyUI lays controls out in the order they are added, so the button can only be at the top if added here.
     -- The window is rebuilt to add it, and the button destroyed to remove it.
-    if isBlocking then parts.unblockButton = window:AddSimpleButton("Unblock the game", onUnblock) end
+    if isBlocking then parts.unblockButton = window:AddSimpleButton("Unblock the game", FullForestAlert.stop) end
     parts.stateText = line(window:AddText({ text = "", height = 18 }))
     parts.nodeRows = {}
     for index in ipairs(ForestFeatures.nodesInRotation) do
@@ -182,7 +181,7 @@ function ScoutWindow.showSettings()
     if isOpen() then showCounts() end
 end
 
--- Destroys the unblock button a frame after its click hid it, as destroying a component in its
+-- Destroys the unblock button a frame after its click hid it, as a component can't be destroyed in its own click.
 -- The controls below move up and the window shrinks by its row.
 local function removeUnblockButton()
     Event.Draw.Unsubscribe(UNBLOCK_SUBSCRIPTION)
@@ -193,8 +192,7 @@ local function removeUnblockButton()
     local window, minimumWidth = parts.window, parts.minimumWidthUnblocked
     window.minWidth = minimumWidth
     if window.resize ~= nil then window.resize.minWidth = minimumWidth end
-    local root = parts.window.root
-    parts.window:SetSize(root.width, root.height - BUTTON_ROW)
+    window:SetSize(window.root.width, window.root.height - BUTTON_ROW)
 end
 
 -- Shows the unblock button with isBlocking, or removes it without.
@@ -203,8 +201,7 @@ function ScoutWindow.showBlocking(isBlocking)
     if not isOpen() then return end
     if isBlocking and parts.unblockButton == nil then
         ScoutWindow.close()
-        openWith[5] = true
-        ScoutWindow.open(table.unpack(openWith, 1, 5))
+        ScoutWindow.open(openedWith.PrettyUI, openedWith.pluginLayer, openedWith.onOpenMap)
     elseif not isBlocking and parts.unblockButton ~= nil then
         parts.unblockButton.root.hidden = true
         Event.Draw.Subscribe(UNBLOCK_SUBSCRIPTION, removeUnblockButton)

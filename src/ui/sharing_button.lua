@@ -45,6 +45,7 @@ function SharingButton.add(window, pluginLayer, isShown, onToggle)
     place()
     if window.resize ~= nil then
         local setEnabled = window.resize.SetEnabled
+        button.setEnabled = setEnabled -- put back on destroy
         window.resize.SetEnabled = function(resize, enabled)
             setEnabled(resize, enabled)
             if not enabled then
@@ -72,6 +73,8 @@ end
 
 function SharingButton:destroy()
     if raised == self then raise() end
+    local resize = self.window.resize
+    if self.setEnabled ~= nil and resize ~= nil then resize.SetEnabled = self.setEnabled end
     self.window:_UnregisterOverlay(self.sprite)
     self.sprite:Destroy()
 end

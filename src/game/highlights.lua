@@ -186,7 +186,7 @@ end
 local function wanted(held)
     local wantedHighlights = {}
     if not Forest.isInside or Forest.playerTile == nil then return wantedHighlights end
-    held = held or ToolsHeld.sourceKeys(Forest.playerTile)
+    held = held or ToolsHeld.sourceKeys()
     local unneeded = NONE
     if Settings.highlightInWorld and Settings.highlightPuzzles and not Settings.highlightUnneededPuzzles then
         unneeded = ForestStops.unneededNow(held)
@@ -420,7 +420,7 @@ local heldShown = {} -- the tools held at the last refresh from a step or an inv
 -- Called on each player step and inventory change; refreshes only when the tools held have changed.
 function Highlights.followPlayer()
     if not Forest.isInside or Forest.playerTile == nil then return end
-    local held = ToolsHeld.sourceKeys(Forest.playerTile)
+    local held = ToolsHeld.sourceKeys()
     if not ForestStops.sameSet(held, heldShown) then
         heldShown = held
         Highlights.refresh(held)
@@ -537,21 +537,30 @@ local function pointAt(origin, x, z)
     return { x = (x - origin.x) * FINE_UNITS_PER_TILE, z = (z - origin.z) * FINE_UNITS_PER_TILE }
 end
 
--- Every tile of a route given by its corner tiles, plus a step onto the target, as points from an origin tile.
+local function stepsBetween(from, to) return math.max(math.abs(to.x - from.x), math.abs(to.z - from.z)) end
+
+-- Returns whether a route given by its corner tiles has a step to draw.
+local function hasStep(tiles)
+    return #tiles >= 2 or stepOntoTarget(tiles[1]) ~= nil
+end
+
+-- Every tile of a route given by its corner tiles, plus a step onto the target, as points from an origin tile;
+-- with upTo, only its first upTo points.
 local routeOrigin = nil -- the tile the route entity sits on
-local function routePoints(tiles, origin)
+local function routePoints(tiles, origin, upTo)
+    upTo = upTo or math.huge
     local positions = { pointAt(origin, tiles[1].x, tiles[1].z) }
     for position = 1, #tiles - 1 do
         local from, to = tiles[position], tiles[position + 1]
-        local steps = math.max(math.abs(to.x - from.x), math.abs(to.z - from.z))
         local stepX = to.x > from.x and 1 or to.x < from.x and -1 or 0
         local stepZ = to.z > from.z and 1 or to.z < from.z and -1 or 0
-        for step = 1, steps do
+        for step = 1, stepsBetween(from, to) do
+            if #positions >= upTo then return positions end
             positions[#positions + 1] = pointAt(origin, from.x + stepX * step, from.z + stepZ * step)
         end
     end
     local targetX, targetZ = stepOntoTarget(tiles[#tiles])
-    if targetX ~= nil then positions[#positions + 1] = pointAt(origin, targetX, targetZ) end
+    if targetX ~= nil and #positions < upTo then positions[#positions + 1] = pointAt(origin, targetX, targetZ) end
     return positions
 end
 
@@ -588,20 +597,22 @@ local restShownKey = nil -- the corner and the corners after it that routeEntity
 -- remade, as remaking one makes it blink and costs a frame. A route still being drawn is left to finish.
 function Highlights.trimRoute(tiles)
     if routeEntity == nil or routeBuild ~= nil or tiles == nil or #tiles == 0 then return end
-    local points = routePoints(tiles, routeOrigin)
     -- with only the player's tile left, the ribbon is kept until the route changes
-    if #points < 2 then return end
-    local edges = ribbonEdges(points)
+    if not hasStep(tiles) then return end
     -- the point where the run the player is on ends, at the first corner that is not the player's own tile
     local cornerAt, corner = 1, nil
     for position = 1, #tiles - 1 do
-        local from, to = tiles[position], tiles[position + 1]
-        cornerAt = cornerAt + math.max(math.abs(to.x - from.x), math.abs(to.z - from.z))
+        cornerAt = cornerAt + stepsBetween(tiles[position], tiles[position + 1])
         if cornerAt > 1 then
             corner = position + 1
             break
         end
     end
+    local restKey = corner and (tiles[corner].x .. "," .. tiles[corner].z .. "/" .. (#tiles - corner))
+    -- Only the run changes from step to step, so the rest's points are worked out only when it changes too.
+    -- The point after the corner gives the corner's mitre.
+    local points = routePoints(tiles, routeOrigin, restKey == restShownKey and cornerAt + 1 or nil)
+    local edges = ribbonEdges(points)
     -- on the last run, one entity holds what is left
     if corner == nil or cornerAt >= #points then
         dropSegment()
@@ -609,8 +620,7 @@ function Highlights.trimRoute(tiles)
         routeEntity:SetShapeData(ribbonBetween(edges, 1, #points))
         return
     end
-    -- Both parts take the corner's mitred edge from the whole route's, so they meet flush.
-    local restKey = tiles[corner].x .. "," .. tiles[corner].z .. "/" .. (#tiles - corner)
+    -- Both parts take the corner's mitred edge from the same edges, so they meet flush.
     if restKey ~= restShownKey then
         restShownKey = restKey
         routeEntity:SetShapeData(ribbonBetween(edges, cornerAt, #points))
@@ -634,8 +644,8 @@ function Highlights.showRoute(tiles, colour)
     if routeEntity ~= nil and key ~= nil and key == routeShownKey and not Settings.hideRouteInWorld then return end
     routeShownKey, restShownKey = key, nil
     stopBuilding()
-    local shown = tiles ~= nil and #tiles > 0 and not Settings.hideRouteInWorld and Forest.isInside
-    if shown and routeEntity ~= nil and #routePoints(tiles, routeOrigin) >= 2 then
+    local visible = tiles ~= nil and #tiles > 0 and not Settings.hideRouteInWorld and Forest.isInside
+    if visible and routeEntity ~= nil and hasStep(tiles) then
         if routeColour ~= colour then
             routeColour = colour
             routeEntity.colour = colour
@@ -648,7 +658,7 @@ function Highlights.showRoute(tiles, colour)
         routeEntity:Destroy()
         routeEntity = nil
     end
-    if tiles == nil or #tiles == 0 or Settings.hideRouteInWorld or not Forest.isInside then return end
+    if not visible then return end
     local first = tiles[1]
     local points = routePoints(tiles, first)
     -- just the player's tile, with nothing to step onto

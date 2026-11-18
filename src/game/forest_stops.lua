@@ -157,7 +157,7 @@ function ForestStops.solveStops(held)
     return stops
 end
 
--- Returns the stops of the keys following annother player.
+-- Returns the stops of the keys following another player.
 -- A plan goes to one only when nothing else it could reach is left.
 function ForestStops.takenKeyStops()
     local stops = {}
@@ -186,7 +186,8 @@ function ForestStops.tilesNotInPlan(stops, blocked)
     return left
 end
 
--- Returns the stops of a tour through the targets, which must be visited, plus the puzzle stops it needs.
+-- Returns the stops of a tour through the targets, which must be visited, plus the puzzle stops it needs, and every
+-- puzzle stop.
 -- The barriers on the routes to the targets and their keys are required.
 function ForestStops.stopsToward(targets, player, held)
     local stops, mustVisit, isStop, isTarget = {}, {}, {}, {}
@@ -215,14 +216,14 @@ function ForestStops.stopsToward(targets, player, held)
         local sourceKey = door.entry.feature.pair.source.key
         if Forest.keysTaken[sourceKey] then takenNeeded[sourceKey] = true else unseen[#unseen + 1] = door end
     end
-    return needed, unseen, takenNeeded
+    return needed, unseen, takenNeeded, puzzleStops
 end
 
--- Returns the puzzle entries that mappingStops does not require.
-local function unneededAmong(mappingStops, held)
+-- Returns the entries of puzzleStops that mappingStops does not require.
+local function unneededAmong(mappingStops, puzzleStops)
     local required, unneeded = {}, {}
     for _, stop in ipairs(mappingStops) do required[stop.entry] = true end
-    for _, stop in ipairs(ForestStops.solveStops(held)) do
+    for _, stop in ipairs(puzzleStops) do
         if not required[stop.entry] then unneeded[stop.entry] = true end
     end
     return unneeded
@@ -234,7 +235,6 @@ local signatureOf = { found = nil, held = nil, signature = nil }
 local function planSignature(held)
     local heldKeys = {}
     for key in pairs(held) do heldKeys[#heldKeys + 1] = key end
-    table.sort(heldKeys)
     for key in pairs(Forest.keysTaken) do heldKeys[#heldKeys + 1] = "taken:" .. key end
     table.sort(heldKeys)
     local heldKey = table.concat(heldKeys, " ")
@@ -259,7 +259,8 @@ local function keptPlan(held)
     local signature = planSignature(held)
     if kept.signature ~= signature or kept.grid ~= Forest.grid or kept.player ~= player then
         kept.signature, kept.grid, kept.player = signature, Forest.grid, player
-        kept.stops, kept.keylessNeeded, kept.takenNeeded = ForestStops.stopsToward(ForestStops.mapStops(), player, held)
+        kept.stops, kept.keylessNeeded, kept.takenNeeded, kept.puzzleStops =
+            ForestStops.stopsToward(ForestStops.mapStops(), player, held)
         kept.unneeded = nil
     end
     return kept
@@ -284,7 +285,7 @@ end
 function ForestStops.unneededNow(held)
     local plan = keptPlan(held)
     if plan == nil then return NONE end
-    if plan.unneeded == nil then plan.unneeded = unneededAmong(plan.stops, held) end
+    if plan.unneeded == nil then plan.unneeded = unneededAmong(plan.stops, plan.puzzleStops) end
     return plan.unneeded
 end
 
