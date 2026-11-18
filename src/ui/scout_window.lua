@@ -64,7 +64,7 @@ local function showCounts()
     local setText = StatusText.set
     if Forest.bounds == nil then
         setText(parts.countText, "")
-        setText(parts.stateText, "Enter the Nemi Forest to scout it.")
+        setText(parts.stateText, "Enter the Nemi Forest")
         for index, node in ipairs(ForestFeatures.nodesInRotation) do
             setText(parts.nodeRows[index], node.name, NODE_COLOUR)
         end
