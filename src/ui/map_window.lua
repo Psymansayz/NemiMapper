@@ -8,8 +8,7 @@ local Forest = require("src/game/forest")
 local GameIds = require("src/game/game_ids")
 local Routes = require("src/game/routes")
 local ForestStops = require("src/game/forest_stops")
-local SolvePlan = require("src/game/solve_plan")
-local Highlights = require("src/game/highlights")
+local RouteChoice = require("src/game/route_choice")
 local ToolsHeld = require("src/game/tools_held")
 local WorldNumber = require("src/game/world_number")
 local Settings = require("src/data/settings")
@@ -62,15 +61,7 @@ local SOLVE_BUTTON_WIDTH = 72 -- as high as the puzzle legend, at its right end
 local SOLVE_INSET = 2 -- the SOLVE button's inset within its column
 local LEGEND_LINE_INSET = 6 -- inset of the legend's dividers, NAVIGATE and the red covers
 local MAP_ROUTE_HEIGHT = 30 -- the NAVIGATE button, at the legend's foot
-local OFF_ROUTE_TILES = 3 -- straying this far from the drawn route recalculates it
 local RESIZE_END_SUBSCRIPTION = "nemi_mapper_map_resize_end"
--- The trail signs at the forest's openings, each on its side's edge pointing out of the forest.
--- A click routes to the sign's opening, as a click on a feature routes to it.
-local ENTRANCE_SIGNS = {
-    { key = "sign_otot", side = "north" },
-    { key = "sign_kanatah", side = "east" },
-}
-local SIGN_ROUTE_COLOUR = 0xF7E1A0FF -- the signs' painted letters
 
 local FRAME_COLOUR = 0x09161FFF
 local FRAME_LINE_COLOUR = 0x2B3C48FF
@@ -86,16 +77,10 @@ local HINT_COLOUR = Colours.GOLD -- "Walk to find"
 local HOVER_SCALE = 1.25 -- a map icon under the mouse grows by this, about its centre
 local HOVER_COLOUR = 0xFFFFFFFF -- outline of a clickable row or pair under the mouse
 local MISSING_COLOUR = Colours.RED | 0x70 -- translucent red over a node absent from this forest but unclaimed today
--- The game's skill icons for the legend's symbols, where <S> is the skill in upper case.
--- The SKILL_<S> sprites are the daily tasks' set, not these.
-local SKILL_SPRITE_PATTERN = "HITMARK_ICON_SKILL_<S>"
-local function skillSpriteOf(skill)
-    return GameIds.resolve("Sprite", (SKILL_SPRITE_PATTERN:gsub("<S>", skill:upper())))
-end
 local KEY_UNSEEN_TEXT = "Walk to find" -- a key's NPC only reaches the client near the player
 local KEY_UNSEEN_NAME = KEY_UNSEEN_TEXT:upper() -- the same on a legend row, whose names are upper case
 local TEXT_FONT = id.Font.MUSEO_SANS_13PT_BOLD
-local HEADER_FONT = GameIds.resolve("Font", "MUSEO_SANS_19PT_BOLD") or TEXT_FONT
+local HEADER_FONT = id.Font.MUSEO_SANS_19PT_BOLD
 local SMALL_FONT = id.Font.MUSEO_SANS_11PT_REGULAR
 MapWindow.onSharingToggled = nil -- called when the title bar's sharing button is clicked
 
@@ -115,11 +100,9 @@ local HEADING_FONTS = boldFonts({ 27, 24, 21, 19, 17, 15, 13 })
 local NAME_FONTS = boldFonts({ 24, 21, 19, 17, 15, 13 })
 local NAME_TO_ROW = 0.5 -- a name's font is at most this share of its row, so it grows with the legend
 
--- The open window, or nil. It holds the window, its components' last written state, the
--- content size, the frame's layout, the route chosen and the plans. build() makes the frame's components and is
--- not run when the pictures are missing. One route is drawn at a time. routeShown is the key of the feature clicked
--- on a legend or the map (a node's, a task's, a puzzle's source key or an entrance sign's), solving means SOLVE is
--- down and mapping means NAVIGATE is down. The final route is drawn only when none of these is set.
+-- The open window, or nil. It holds the window, its components' last written state, the content size and the
+-- frame's layout. build() makes the frame's components and is not run when the pictures are missing. The map draws
+-- the route chosen (src/game/route_choice.lua), or the final route when none is chosen.
 local parts = nil
 local showLegendStates -- defined below
 
@@ -231,8 +214,7 @@ local function showButtonParts(button, isShown, simple)
     if button.icon ~= nil then setHidden(button.icon, not isShown or not iconShown) end
 end
 
--- properly positions the compass sprites. Note that the game does not center the compass correctly
--- Ninja team, please fix this!
+-- The game's compass sprites are off centre, so they are inset by COMPASS_INSET.
 local COMPASS_INSET = 3 -- pixels
 local COMPASS_CENTRE, COMPASS_SCALE = COMPASS_INSET + COMPASS_SIZE / 2, COMPASS_SIZE / COMPASS_RING_PIXELS
 local function placeCompassSprite(component, pixels, frame)
@@ -293,7 +275,7 @@ local function placeZones()
         local sprite = shown.sprite
         if shown.zone ~= zone then
             shown.zone, shown.angle = zone, nil
-            shown.picture = picture("zone_" .. zone.sourceX .. "_" .. zone.sourceZ)
+            shown.picture = picture("zone_" .. zone.templateKey)
             if shown.picture ~= nil then sprite.sprite = shown.picture end
         end
         setHidden(sprite, shown.picture == nil)
@@ -385,7 +367,7 @@ end
 -- leaves. It is only for sharing, so it waits for the next server tick rather than share a frame with NAVIGATE's
 -- plan, and is skipped while a route is chosen.
 local finalRouteOf = nil -- { entry, routes } for the last forest entered, keyed by its entry tile
-local waitForFinalRoute -- defined below drawRoutes, which it calls
+local waitForFinalRoute -- defined below paintRoutes, which it calls
 local function workOutFinalRoute()
     local grid, entry = Forest.grid, Forest.entryTile
     local openings = {}
@@ -406,17 +388,12 @@ local function workOutFinalRoute()
     finalRouteOf = { entry = entry, routes = Routes.finalRoute(grid, openings[1] or entry, openings[2], targets) }
 end
 
--- Returns the final route's pieces
+-- Returns the final route's pieces.
 local function finalRoutes()
-    if Forest.grid == nil or Forest.entryTile == nil then return {} end
+    if Forest.entryTile == nil then return {} end
     if finalRouteOf ~= nil and finalRouteOf.entry == Forest.entryTile then return finalRouteOf.routes end
     if not Forest.isSearching then waitForFinalRoute() end
     return {}
-end
-
--- Returns whether toolPair's route is wanted
-local function wantsRoute(toolPair)
-    return parts.routeShown == toolPair.source.key and not Forest.doorsGone[toolPair.barrier.key]
 end
 
 -- Returns the tools the player holds, by source key.
@@ -428,202 +405,7 @@ local function toolsHeld()
     return redraw.held
 end
 
--- Returns the mapping plan's stops: the tour through every node not claimed today, plus the barriers with unseen keys
--- on the way, from the player's tile with the tools held.
-local function mappingStops()
-    return ForestStops.mappingStopsNow(toolsHeld())
-end
-
--- Returns the next stop of the named plan
-local function plannedStop(name, player, held, stops, blocked)
-    -- The plan ignores the player's position. It holds until the player leaves the drawn route or its inputs change.
-    -- Stops are told apart by found feature, so a key's NPC first seen is a new stop but one that drifts is not.
-    local stopsAt, blockedAt = {}, {}
-    for _, stop in ipairs(stops) do
-        stopsAt[#stopsAt + 1] = tostring(stop.entry) .. stop.kind
-            .. (stop.needs and ("<" .. tostring(stop.needs.entry)) or "")
-    end
-    for index in pairs(blocked) do blockedAt[#blockedAt + 1] = index end
-    table.sort(blockedAt)
-    local state = { table.concat(stopsAt, " "), table.concat(blockedAt, " "), tostring(Forest.grid) }
-    for _, toolPair in ipairs(ForestFeatures.tools) do
-        state[#state + 1] = (held[toolPair.source.key] and "h" or "-")
-            .. (Forest.doorsGone[toolPair.barrier.key] and "g" or "-")
-    end
-    state = table.concat(state, "|")
-    local plan = parts.plans[name]
-    local same = plan ~= nil and plan.state == state
-    -- A plan with no stop is retried when the player enters another zone;
-    local zone = (player.x // ZONE_SIZE) .. "," .. (player.z // ZONE_SIZE)
-    if same and plan.stop == nil and plan.failedIn ~= zone then same = false end
-    if not same then
-        local stop, playerSearch = SolvePlan.nextStop(Forest.grid, player, stops, blocked)
-        plan = { state = state, stop = stop, failedIn = zone, search = playerSearch, searchFrom = player }
-        parts.plans[name] = plan
-    end
-    return plan.stop, plan.searchFrom == player and plan.search or nil
-end
-
-local function dropRouteChoice()
-    parts.routeShown, parts.solving, parts.mapping = nil, false, false
-end
-
-local function routeChosen()
-    return parts.solving or parts.mapping or parts.routeShown ~= nil
-end
-
--- Returns the chosen route from the player.
--- A plan keeps the last route's target (keep) while it is still a stop, so only finishing it, leaving the route or
--- choosing again switch targets.
-local function chosenRoute(player, keep)
-    local held, blocked = toolsHeld(), ForestStops.barrierTiles()
-    -- Returns the stops a plan must visit, as entry -> true, with the doors waiting for an unseen key.
-    local function stopsOf(stops, keylessNeeded)
-        local entries = {}
-        for _, stop in ipairs(stops) do entries[stop.entry] = true end
-        for _, door in ipairs(keylessNeeded) do entries[door.entry] = true end
-        return entries
-    end
-    -- A route with no stop due to keys not yet seen sends the player to the center of the forest.
-    -- If the only stop accessible is a key taken by another player, the route goes to that stop.
-    local function routeByPlan(name, stops, keylessNeeded, takenNeeded)
-        local stop, playerSearch = ForestStops.keptStop(stops, keep), nil
-        if stop == nil then
-            stop, playerSearch = plannedStop(name, player, held, stops, ForestStops.tilesNotInPlan(stops, blocked))
-        end
-        if stop == nil then
-            for _, takenStop in ipairs(ForestStops.takenKeyStops()) do
-                if takenNeeded[takenStop.entry.feature.key] then
-                    local route = Routes.routeTo(Forest.grid, player, { takenStop }, blocked)
-                    if route ~= nil then
-                        return route, takenStop.colour, takenStop.entry, { [takenStop.entry] = true }
-                    end
-                end
-            end
-            if #keylessNeeded == 0 then return nil end
-            local keysUnseen = {}
-            for _, door in ipairs(keylessNeeded) do
-                keysUnseen[#keysUnseen + 1] = door.entry.feature.pair.source.name
-            end
-            return Routes.routeTowardCentre(Forest.grid, player, blocked), keylessNeeded[1].colour, nil,
-                stopsOf(stops, keylessNeeded), keysUnseen
-        end
-        -- A kept plan's stop has the tiles its NPC was found on, but the route goes to where the NPC is now.
-        local target = stop.entry.isNpc and ForestStops.stopOf(stop.kind, stop.entry, stop.colour) or stop
-        local route
-        if playerSearch ~= nil then
-            route = Routes.routeFrom(playerSearch, Forest.grid, { target })
-        else
-            route = Routes.routeTo(Forest.grid, player, { target }, blocked)
-        end
-        local entries = stopsOf(stops, keylessNeeded)
-        entries[stop.entry] = true
-        return route, stop.colour, stop.entry, entries
-    end
-
-    local function routeOrPlan(tiles, colour, name, targetOf, stopAt)
-        local route = Routes.routeTo(Forest.grid, player, tiles, blocked)
-        if route ~= nil then
-            local target = targetOf(route)
-            return route, colour, target, { [target] = true }
-        end
-        local openRoute = Routes.routeTo(Forest.grid, player, tiles)
-        if openRoute == nil then return nil end
-        local stops, keylessNeeded, takenNeeded = ForestStops.stopsToward({ stopAt(openRoute) }, player, held)
-        return routeByPlan(name, stops, keylessNeeded, takenNeeded)
-    end
-    -- Returns the route to a feature of a kind and key, aiming for the one nearest with the barriers open.
-    local function routeToThing(kind, key, colour)
-        return routeOrPlan(ForestStops.tilesOfKind(kind, key), colour, "to " .. key,
-            function(route) return ForestStops.entryAtEnd(route, kind, key) end,
-            function(openRoute)
-                return ForestStops.stopOf(kind == "barrier" and "door" or "key",
-                    ForestStops.entryAtEnd(openRoute, kind, key), colour)
-            end)
-    end
-    -- Returns the route to an opening's mouth, which stands as the route's target.
-    local function routeToOpening(opening, name)
-        local mouth = { x = opening.x, z = opening.z, tiles = { opening }, kind = "key", colour = SIGN_ROUTE_COLOUR,
-            entry = opening }
-        return routeOrPlan({ mouth }, SIGN_ROUTE_COLOUR, name, function() return opening end,
-            function() return mouth end)
-    end
-    if parts.mapping then
-        local stops, keylessNeeded, takenNeeded = mappingStops()
-        return routeByPlan("nodes", stops, keylessNeeded, takenNeeded)
-    end
-    if parts.solving then return routeByPlan("puzzles", ForestStops.solveStops(held), {}, Forest.keysTaken) end
-    for _, sign in ipairs(ENTRANCE_SIGNS) do
-        if sign.key == parts.routeShown then
-            local opening = ForestStops.openingOn(sign.side)
-            if opening == nil then return nil end
-            return routeToOpening(opening, "to " .. sign.key)
-        end
-    end
-    local rowFeature = parts.routeFeatureOf[parts.routeShown]
-    if rowFeature ~= nil and not rowFeature.isPuzzle then
-        return routeToThing(rowFeature.kind, rowFeature.key, ForestFeatures.colourOf(rowFeature))
-    end
-    for _, toolPair in ipairs(ForestFeatures.tools) do
-        if wantsRoute(toolPair) then
-            local target = held[toolPair.source.key] and toolPair.barrier or toolPair.source
-            local route, colour, targetEntry, stops, keysUnseen = routeToThing(target.kind, target.key, toolPair.colour)
-            -- A puzzle chosen is its key and its door, whichever the route leads to now, so both are its stops.
-            stops = stops or {}
-            for _, entry in ipairs(Forest.found) do
-                if entry.feature == toolPair.source or entry.feature == toolPair.barrier then stops[entry] = true end
-            end
-            return route, colour, targetEntry, stops, keysUnseen
-        end
-    end
-    return nil
-end
-
--- Returns where <route> passes nearest to <tile>
-local function nearestOnRoute(route, tile)
-    local bestDistance, bestX, bestZ, bestNext = nil, nil, nil, nil
-    for position = 1, #route do
-        local from, to = route[position], route[position + 1] or route[position]
-        local stepX, stepZ = to.x - from.x, to.z - from.z
-        local steps = math.max(math.abs(stepX), math.abs(stepZ))
-        stepX, stepZ = stepX > 0 and 1 or stepX < 0 and -1 or 0, stepZ > 0 and 1 or stepZ < 0 and -1 or 0
-        for step = 0, steps do
-            local x, z = from.x + stepX * step, from.z + stepZ * step
-            local distance = math.max(math.abs(x - tile.x), math.abs(z - tile.z))
-            if bestDistance == nil or distance < bestDistance then
-                bestDistance, bestX, bestZ, bestNext = distance, x, z, position + 1
-            end
-        end
-    end
-    -- The last tile is found as the last piece's end, but it is the route's end.
-    local last = route[#route]
-    if bestX == last.x and bestZ == last.z then bestNext = #route + 1 end
-    return bestDistance, { x = bestX, z = bestZ }, bestNext
-end
-
--- Returns whether a plan has anything left, which is unclaimed nodes for mapping or unfinished puzzles for solving.
--- When not, its button releases itself.
-local function planHasWork()
-    if parts.mapping then
-        -- Keys and barriers the routes to the nodes do not need are not work.
-        -- The grid is missing on the tick the player enters, until the forest's first publish.
-        if not Forest.isInside or Forest.playerTile == nil or Forest.grid == nil then
-            return #ForestStops.mapStops() > 0
-        end
-        return #(mappingStops()) > 0
-    end
-    if parts.solving then
-        for _, toolPair in ipairs(ForestFeatures.tools) do
-            if not Forest.doorsGone[toolPair.barrier.key] and (Forest.countOf[toolPair.barrier.key] or 0) > 0 then
-                return true
-            end
-        end
-        return false
-    end
-    return true
-end
-
-local placeMarkers, placeSigns, chooseRoute -- defined below
+local placeMarkers, placeSigns -- defined below
 
 -- Returns what the map should show from the settings.
 local function view()
@@ -657,7 +439,7 @@ local function view()
     return redraw.view
 end
 
-local NO_STOPS = {}
+local EMPTY = {}
 
 -- Shows, on the map's bottom left above the duplicates note, which keys the route walks toward the forest's centre to
 -- find (keysUnseen: their names), in the route's colour, or hides it with none. Written only on change.
@@ -672,106 +454,62 @@ local function showKeysUnseen(keysUnseen, colour)
     end
 end
 
--- Draws the chosen route in its target's colour, with the world beam on the target, or the final route in white
--- when none is chosen and it is on. A search on every step would cost too much, so the route is kept
--- (parts.routeDrawn) and worked out again only when the forest, the choice or the tools held change or the player
--- strays from it. With afresh, a plan may switch target; otherwise it keeps its target while that is a stop.
-local function drawRoutes(afresh)
-    afresh = afresh or parts.planAfresh == true
-    parts.planAfresh = nil
+-- Draws the chosen route in its target's colour, from the player on, or the final route in white when none is chosen
+-- and it is on.
+local function paintRoutes()
     parts.routes:Clear()
-    if (parts.mapping or parts.solving) and Forest.bounds ~= nil and not planHasWork() then
-        -- The plan is finished, so its button releases.
-        parts.mapping, parts.solving = false, false
-        showLegendStates()
-    end
-    local waitsFor = parts.routeWaitsFor
-    if waitsFor ~= nil and parts.routeShown == waitsFor.key and not ForestStops.isWorkLeft(waitsFor) then
-        dropRouteChoice()
-        showLegendStates()
-    end
-    local player = Forest.playerTile
-    local route, colour, target, stops, keysUnseen = nil, nil, nil, nil, nil
-    if Forest.grid ~= nil and player ~= nil and routeChosen() then
-        local keep = not afresh and parts.routeDrawn and parts.routeDrawn.target or nil
-        route, colour, target, stops, keysUnseen = chosenRoute(player, keep)
-    end
-    local stopsBefore = parts.routeDrawn and parts.routeDrawn.stops or NO_STOPS
-    stops = route and stops or NO_STOPS
-    parts.routeDrawn = route and { tiles = route, colour = colour, target = target, stops = stops } or nil
-    -- A stop's icon or sign may be shown only because it is one of the route's stops.
-    if Settings.alwaysShowTarget and not ForestStops.sameSet(stops, stopsBefore) then
-        placeMarkers()
-        placeSigns()
-    end
-    showKeysUnseen(route and keysUnseen, colour)
-    if route ~= nil then
-        if view().activeRoute then drawRoute(route, colour) end
-    elseif Forest.grid ~= nil and view().finalRoute and not routeChosen() then
+    local drawn = RouteChoice.drawn
+    parts.routePainted = drawn ~= nil
+    showKeysUnseen(drawn and drawn.keysUnseen, drawn and drawn.colour)
+    if drawn ~= nil then
+        if view().activeRoute then drawRoute(drawn.ahead or drawn.tiles, drawn.colour) end
+    elseif Forest.grid ~= nil and view().finalRoute and not RouteChoice.isChosen() then
         -- The first branch starts at the entrance, the others where they leave the tree drawn so far.
         for index, finalRoute in ipairs(finalRoutes()) do drawRoute(finalRoute, FINAL_ROUTE_COLOUR, index > 1) end
     end
-    -- An opening is not a feature found, so it gets no beam.
-    Highlights.beamOn(route and target and target.feature and target or nil, stops)
-    Highlights.showRoute(route, colour)
+end
+
+-- Shows the route chosen: the legend's pressed buttons and outlines, the route, and the icons and signs shown only
+-- as its stops.
+local function showRoute()
+    local drawn = RouteChoice.drawn
+    if Settings.alwaysShowTarget and not ForestStops.sameSet(drawn and drawn.stops or EMPTY, parts.stopsShown) then
+        placeMarkers()
+        placeSigns()
+    end
+    showLegendStates()
+    paintRoutes()
+end
+
+-- Chooses one route, clearing the other choices (RouteChoice.choose), and shows it.
+local function chooseRoute(shown, solving, mapping)
+    RouteChoice.choose(shown, solving, mapping)
+    newRedraw()
+    showRoute()
 end
 
 -- Works out and draws the final route on the next server tick, if the map is still open with the final route on
 -- and nothing chosen in its place.
 local FINAL_ROUTE_SUBSCRIPTION = "nemi_mapper_final_route"
-local function stopWaitingForFinalRoute()
-    Event.ServerLogic.Unsubscribe(FINAL_ROUTE_SUBSCRIPTION)
-end
 -- Subscribing again while waiting replaces the same subscription.
 waitForFinalRoute = function()
     Event.ServerLogic.Subscribe(FINAL_ROUTE_SUBSCRIPTION, function()
-        stopWaitingForFinalRoute()
+        Event.ServerLogic.Unsubscribe(FINAL_ROUTE_SUBSCRIPTION)
         if not isLaidOut() then return end
         newRedraw()
         if Forest.grid ~= nil and Forest.entryTile ~= nil and not Forest.isSearching and view().finalRoute
-            and not routeChosen() then
+            and not RouteChoice.isChosen() then
             workOutFinalRoute()
-            drawRoutes()
+            paintRoutes()
         end
     end)
 end
 
--- Called when the player steps: while on the drawn route, it is redrawn from the tile nearest to the player.
-local function followRoute(player)
-    local drawn = parts.routeDrawn
-    if drawn == nil then return drawRoutes() end
-    local distance, routeTile, nextCorner = nearestOnRoute(drawn.tiles, player)
-    if distance > OFF_ROUTE_TILES then
-        parts.plans = {}
-        return drawRoutes(true)
-    end
-    local ahead = drawn.ahead or drawn.tiles
-    if nextCorner <= #drawn.tiles then
-        ahead = { routeTile }
-        for position = nextCorner, #drawn.tiles do ahead[#ahead + 1] = drawn.tiles[position] end
-        drawn.ahead = ahead
-    end
-    parts.routes:Clear()
-    if view().activeRoute then drawRoute(ahead, drawn.colour) end
-    if nextCorner > #drawn.tiles then return end
-    -- The world's line is cut back at each tile walked along it (highlights.lua).
-    if drawn.trimmedX ~= routeTile.x or drawn.trimmedZ ~= routeTile.z then
-        drawn.trimmedX, drawn.trimmedZ = routeTile.x, routeTile.z
-        Highlights.trimRoute(ahead)
-    end
-end
-
-local function redrawRoutes()
-    if parts.routeDrawn ~= nil and Forest.playerTile ~= nil then return followRoute(Forest.playerTile) end
-    if routeChosen() then return parts.routes:Clear() end
-    drawRoutes()
-end
-
 -- Returns whether a found feature is shown on the map.
-local function isShown(entry, held, unneeded)
+local function isMarkerShown(entry, held, unneeded)
     local shows, feature = view(), entry.feature
     -- The route's stops stay by their own setting, except a key just taken, as the route is about to move on.
-    local drawn = parts.routeDrawn
+    local drawn = RouteChoice.drawn
     if Settings.alwaysShowTarget and drawn ~= nil and drawn.stops[entry]
         and not (feature.kind == "source" and held[feature.key]) then
         return true
@@ -793,7 +531,7 @@ end
 -- Chooses a legend row's, map icon's or entrance sign's route, or drops it on a second click.
 local function toggleRoute(key)
     if not canChooseRoute() then return end
-    chooseRoute(parts.routeShown ~= key and key or nil, false, false)
+    chooseRoute(RouteChoice.shown ~= key and key or nil, false, false)
 end
 
 -- Makes a map sprite choose its route when clicked and grow when hovered.
@@ -819,8 +557,9 @@ end
 placeMarkers = function()
     local shown, held = 0, toolsHeld()
     local unneeded = view().unneededPuzzles and {} or ForestStops.unneededNow(held)
+    parts.stopsShown = RouteChoice.drawn and RouteChoice.drawn.stops or EMPTY
     for _, entry in ipairs(Forest.found) do
-        if isShown(entry, held, unneeded) then
+        if isMarkerShown(entry, held, unneeded) then
             shown = shown + 1
             local marker = parts.markers[shown]
             if marker == nil then
@@ -854,9 +593,9 @@ end
 
 -- Places each entrance sign at its opening's clearing.
 placeSigns = function()
-    local stops = Settings.alwaysShowTarget and parts.routeDrawn and parts.routeDrawn.stops or NO_STOPS
+    local stops = Settings.alwaysShowTarget and RouteChoice.drawn and RouteChoice.drawn.stops or EMPTY
     for _, sign in ipairs(parts.signs) do
-        local opening = Forest.bounds ~= nil and ForestStops.openingOn(sign.side) or nil
+        local opening = ForestStops.openingOn(sign.side)
         if opening ~= nil and not view().entranceSigns and not stops[opening] then opening = nil end
         setHidden(sign.sprite, opening == nil)
         if opening ~= nil then
@@ -961,7 +700,7 @@ local function showCounts()
         local feature = row.feature
         local foundCount = Forest.countOf[feature.key] or 0
         -- canRoute also needs the player inside and no sharing mode, so no outline shows where a click does nothing.
-        row.canRoute = isMapped and foundCount > 0 and canChooseRoute()
+        row.canRoute = foundCount > 0 and canChooseRoute()
         local count = feature.kind == "node" and (unusedOf[feature.key] or 0) or foundCount
         if feature.kind == "task" and shows.forestNotes and not Forest.isTaskActive(feature) then count = 0 end
         local isDimmed = isMapped and count == 0
@@ -1028,7 +767,7 @@ end
 -- Returns the puzzles shown in the legend, marking the keys held whose cells show their doors' pictures in a
 -- simplified legend, as a string to notice a change by.
 local function shownPairsKey()
-    local held = view().simpleLegends and parts.puzzleShown and toolsHeld() or NO_STOPS
+    local held = view().simpleLegends and parts.puzzleShown and toolsHeld() or EMPTY
     local keys = {}
     for _, pair in ipairs(shownPuzzlePairs()) do
         local key = pair.toolPair.source.key
@@ -1043,7 +782,7 @@ local function puzzleLegendShown()
     if not view().puzzleLegend then return false end
     local shown = Forest.bounds == nil or Forest.isSearching or Forest.barriersLeft()
     -- The minimum size is worked out before the window and its pairs exist, so the pairs count only once made.
-    if parts == nil or parts.puzzlePairs == nil then return shown end
+    if parts == nil then return shown end
     redraw.puzzleLegendShown = shown and #shownPuzzlePairs() > 0
     return redraw.puzzleLegendShown
 end
@@ -1058,29 +797,40 @@ local PUZZLE_WINDOW_LEAST_WIDTH = EDGE + MINIMUM_MAP_SIZE
     + clampedLegendWidth(MINIMUM_MAP_SIZE * LEGEND_TO_MAP, LEGEND_MINIMUM_WIDTH) + WINDOW_EDGE_WIDTH
 
 -- A simplified legend is as wide as its NAVIGATE button, inside the legend's border.
-local function legendMinimumWidthFor(shows)
-    if not shows.simpleLegends then return LEGEND_MINIMUM_WIDTH end
+local function legendMinimumWidth()
+    if not view().simpleLegends then return LEGEND_MINIMUM_WIDTH end
     return PATHS_ICON_SPRITE ~= nil and MAP_ROUTE_HEIGHT + 2
         or config.Font.FromID(TEXT_FONT):GetStringWidth("NAVIGATE") + 18
 end
 
--- Returns whether the node legend shows a feature's row
-local function legendRowShown(feature, listIndex, shows)
-    if listIndex == 2 then return shows.taskLegend or Forest.isTaskActive(feature) end
-    return shows.claimedInLegend or not Forest.isNodeClaimed(feature.key)
+-- Returns whether the node legend shows a feature's row.
+local function legendRowShown(feature, listIndex)
+    if listIndex == 2 then return view().taskLegend or Forest.isTaskActive(feature) end
+    return view().claimedInLegend or not Forest.isNodeClaimed(feature.key)
 end
 
 local LEGEND_LISTS = { ForestFeatures.nodes, ForestFeatures.trinksTasks }
+local LEGEND_TITLES = { "SKILL NODES", "TRINKS' TASKS" }
+local LEGEND_NAMES = {} -- every row's name, upper case as shown
+for _, list in ipairs(LEGEND_LISTS) do
+    for _, feature in ipairs(list) do LEGEND_NAMES[#LEGEND_NAMES + 1] = feature.name:upper() end
+end
+
+-- Returns the node legend's heading height at a legend's width, and the heading font that fits it.
+local function legendHeading(legendWidth)
+    local font = fittingFont(HEADING_FONTS, LEGEND_TITLES, math.max(1, legendWidth - 16))
+    return view().simpleLegends and 0 or font.size + HEADING_PADDING * 2, font
+end
 
 -- Returns the node legend's rows shown, its lists shown (the tasks' heading goes with any task row shown), and the rows
 -- it leaves out (claimed nodes, tasks not active) as a string to notice a change by.
-local function legendRowsShown(shows)
+local function legendRowsShown()
     local counted = redraw.legendRows
     if counted == nil then
         local rows, taskRows, hidden = 0, 0, {}
         for listIndex, list in ipairs(LEGEND_LISTS) do
             for _, feature in ipairs(list) do
-                if legendRowShown(feature, listIndex, shows) then
+                if legendRowShown(feature, listIndex) then
                     rows = rows + 1
                     if listIndex == 2 then taskRows = taskRows + 1 end
                 else
@@ -1097,19 +847,17 @@ end
 -- Returns whether the node legend shows: by its setting, while it has a row to show. With every node claimed and
 -- left out and no task shown, it goes with NAVIGATE, which has nothing left to do, and the map takes its room.
 local function nodeLegendShown()
-    local shows = view()
-    return shows.nodeLegend and (legendRowsShown(shows)) > 0
+    return view().nodeLegend and legendRowsShown() > 0
 end
 
 -- Returns a simplified node legend's width: its widest picture at the rows' height.
-local function simpleLegendWidthFor(legendHeight, shows, rowCount)
-    local legendMinimumWidth = legendMinimumWidthFor(shows)
+local function simpleLegendWidthFor(legendHeight, rowCount)
     if rowCount == nil then
         rowCount = 0
         for _, list in ipairs(LEGEND_LISTS) do rowCount = rowCount + #list end
     end
     rowCount = math.max(1, rowCount)
-    local rowHeight = (legendHeight - (shows.mapRoute and MAP_ROUTE_HEIGHT or 0)) / rowCount
+    local rowHeight = (legendHeight - (view().mapRoute and MAP_ROUTE_HEIGHT or 0)) / rowCount
     local widest = 0
     for _, list in ipairs(LEGEND_LISTS) do
         for _, feature in ipairs(list) do
@@ -1118,55 +866,48 @@ local function simpleLegendWidthFor(legendHeight, shows, rowCount)
             widest = math.max(widest, size.width * scale)
         end
     end
-    return clampedLegendWidth(widest + SIMPLE_ICON_INSET * 2, legendMinimumWidth)
+    return clampedLegendWidth(widest + SIMPLE_ICON_INSET * 2, legendMinimumWidth())
 end
 
--- Returns a node legend's width when in its own window
-local function poppedNodeLegendWidth(legendHeight, shows)
-    if shows.simpleLegends then return simpleLegendWidthFor(legendHeight, shows, (legendRowsShown(shows))) end
+-- Returns a node legend's width when in its own window.
+local function poppedNodeLegendWidth(legendHeight)
+    if view().simpleLegends then return simpleLegendWidthFor(legendHeight, (legendRowsShown())) end
     return clampedLegendWidth(legendHeight * LEGEND_TO_MAP, LEGEND_MINIMUM_WIDTH)
 end
 
 -- Returns the node legend's width in the frame beside a map of mapSize, rounded up.
-local function legendWidthFor(mapSize, shows)
-    if shows.simpleLegends then
-        return simpleLegendWidthFor((shows.header and HEADER_HEIGHT or EDGE) + mapSize - EDGE, shows)
+local function legendWidthFor(mapSize)
+    if view().simpleLegends then
+        return simpleLegendWidthFor((view().header and HEADER_HEIGHT or EDGE) + mapSize - EDGE)
     end
     return clampedLegendWidth(mapSize * LEGEND_TO_MAP, LEGEND_MINIMUM_WIDTH)
 end
 
-local function puzzleLegendHeight(shows)
-    return shows.simpleLegends and SIMPLE_PUZZLE_LEGEND_HEIGHT or PUZZLE_LEGEND_HEIGHT
+local function puzzleLegendHeight()
+    return view().simpleLegends and SIMPLE_PUZZLE_LEGEND_HEIGHT or PUZZLE_LEGEND_HEIGHT
 end
 
 -- Returns the window size that fits the frame around a map of mapSize.
 local function fittedWindowSize(mapSize)
     local shows = view()
     local width = EDGE * 2 + mapSize
-    if nodeLegendShown() and not shows.nodeLegendPopped then width = width + EDGE + legendWidthFor(mapSize, shows) end
+    if nodeLegendShown() and not shows.nodeLegendPopped then width = width + EDGE + legendWidthFor(mapSize) end
     local height = (shows.header and HEADER_HEIGHT or EDGE) + mapSize + EDGE
-    if puzzleLegendShown() and not shows.puzzleLegendPopped then
-        height = height + puzzleLegendHeight(shows) + EDGE
-    end
+    if puzzleLegendShown() and not shows.puzzleLegendPopped then height = height + puzzleLegendHeight() + EDGE end
     return width + WINDOW_EDGE_WIDTH, height + WINDOW_EDGE_HEIGHT
-end
-
-local function minimumSize()
-    return fittedWindowSize(MINIMUM_MAP_SIZE)
 end
 
 -- Sets the window's minimum to what is shown. PrettyUI's resize handle keeps its own copy of the limits.
 local function setMinimumSize(window, width, height)
     window.minWidth, window.minHeight = width, height
-    if window.resize ~= nil then window.resize.minWidth, window.resize.minHeight = width, height end
+    window.resize.minWidth, window.resize.minHeight = width, height
 end
 
 -- Shows what the forest holds in the frame as laid out.
--- After a resize (isResize) the routes are drawn again at the new size.
-local function showFound(isResize)
+local function showFound()
     -- A new grid may turn the zones differently.
     if parts.zonesShown ~= Forest.zones or parts.zonesTurnedBy ~= Forest.zoneTurns then placeZones() end
-    if isResize then redrawRoutes() else drawRoutes() end
+    paintRoutes()
     placeMarkers()
     placeSigns()
     showPlayer()
@@ -1176,49 +917,29 @@ end
 -- Returns whether the legends must be laid out again: the puzzle legend coming or going, rows hidden or shown again,
 -- the puzzles shown changing, or a simplified cell's picture switching between key and door.
 local function needsLayout()
-    return parts.puzzleShown ~= puzzleLegendShown() or parts.hiddenRowsKey ~= select(3, legendRowsShown(view()))
+    return parts.puzzleShown ~= puzzleLegendShown() or parts.hiddenRowsKey ~= select(3, legendRowsShown())
         or parts.shownPairsKey ~= shownPairsKey()
 end
 
 local function showForest()
     newRedraw()
-    -- A key freed (the player who had it left the forest) may now be on the shortest way, so the plans are made again
-    -- instead of keeping their targets.
-    for sourceKey in pairs(parts.takenShown or NO_STOPS) do
-        if not Forest.keysTaken[sourceKey] then parts.plans, parts.planAfresh = {}, true end
-    end
-    parts.takenShown = {}
-    for sourceKey in pairs(Forest.keysTaken) do parts.takenShown[sourceKey] = true end
     if needsLayout() then return layoutFitting() end
     showFound()
 end
 
--- Updates the map and a chosen route as needed if the held tools change, and returns whether they did.
+-- Updates the map as needed if the held tools change, and returns whether they did.
 local function showHeldChange()
     local held = toolsHeld()
     if ForestStops.sameSet(held, parts.heldShown) then return false end
-    parts.heldShown, parts.plans, parts.planAfresh = held, {}, true
+    parts.heldShown = held
     if needsLayout() then
         layoutFitting()
     else
         placeMarkers()
         showCounts()
-        if routeChosen() then drawRoutes() end
+        paintRoutes()
     end
     return true
-end
-
--- Draws the frame's panels and outlines, with the node legend's border while the legend is in the frame.
-local function drawChrome()
-    local canvas, frame = parts.chrome, parts.frame
-    canvas:Clear()
-    canvas:AddRectangle(frame.left, frame.top, frame.width, frame.height, FRAME_COLOUR)
-    canvas:AddOutline(frame.left, frame.top, frame.width, frame.height, 2, FRAME_LINE_COLOUR)
-    canvas:AddOutline(frame.mapLeft - 2, frame.mapTop - 2, frame.mapSize + 4, frame.mapSize + 4, 2, FRAME_LINE_COLOUR)
-    if parts.legendShown and parts.nodeHost.window == nil then
-        local box = parts.nodeBox
-        canvas:AddOutline(box.left, box.top, box.width, box.height, 1, FRAME_LINE_COLOUR)
-    end
 end
 
 -- Writes a button's colours only when they change.
@@ -1257,52 +978,40 @@ local function drawPuzzleOverlay(canvas, box)
     end
 end
 
--- Draws the legends' arrows and dividers on an overlay above the cells in the frame, as the cells would
--- cover them if drawn under.
-local function drawOverlay()
+-- Draws the frame's panels and outlines, with the node legend's border while the legend is in the frame, and the
+-- legends' arrows and dividers on an overlay above the cells in the frame, as the cells would cover them if drawn
+-- under.
+local function drawFrame()
+    local canvas, frame = parts.chrome, parts.frame
+    local nodeInFrame = parts.legendShown and parts.nodeHost.window == nil
+    canvas:Clear()
+    canvas:AddRectangle(frame.left, frame.top, frame.width, frame.height, FRAME_COLOUR)
+    canvas:AddOutline(frame.left, frame.top, frame.width, frame.height, 2, FRAME_LINE_COLOUR)
+    canvas:AddOutline(frame.mapLeft - 2, frame.mapTop - 2, frame.mapSize + 4, frame.mapSize + 4, 2, FRAME_LINE_COLOUR)
+    if nodeInFrame then
+        local box = parts.nodeBox
+        canvas:AddOutline(box.left, box.top, box.width, box.height, 1, FRAME_LINE_COLOUR)
+    end
     parts.overlay:Clear()
     if parts.puzzleShown and parts.puzzleHost.window == nil then drawPuzzleOverlay(parts.overlay, parts.puzzleBox) end
-    if parts.legendShown and parts.nodeHost.window == nil then drawNodeOverlay(parts.overlay, parts.nodeBox) end
-end
-
--- Draws a legend in its own window (host, in box): the frame's colour behind it, the node legend's border, and
--- the overlay drawOver draws.
-local function drawPopped(host, box, drawOver)
-    host.chrome:Clear()
-    host.chrome:AddRectangle(0, 0, box.width, box.height, FRAME_COLOUR)
-    if host == parts.nodeHost then
-        host.chrome:AddOutline(box.left, box.top, box.width, box.height, 1, FRAME_LINE_COLOUR)
-    end
-    host.overlay:Clear()
-    drawOver(host.overlay, box)
+    if nodeInFrame then drawNodeOverlay(parts.overlay, parts.nodeBox) end
 end
 
 -- Outlines the cell whose route is drawn, covers the rows of absent nodes, and shows the buttons pressed or not.
 function showLegendStates()
     for _, pair in ipairs(parts.puzzlePairs) do
         setHidden(pair.outline, not parts.puzzleShown or not pair.isShown
-            or pair.toolPair.source.key ~= parts.routeShown)
+            or pair.toolPair.source.key ~= RouteChoice.shown)
     end
     for _, row in ipairs(parts.legendRows) do
-        setHidden(row.outline, not row.isShown or row.feature.key ~= parts.routeShown)
+        setHidden(row.outline, not row.isShown or row.feature.key ~= RouteChoice.shown)
         setHidden(row.missing, not row.isShown or not row.isNeeded)
         if row.claimedBackground ~= nil then
             setHidden(row.claimedBackground, not row.isShown or not row.isClaimedAbsent)
         end
     end
-    showButton(parts.solveButton, parts.solving)
-    showButton(parts.mapRouteButton, parts.mapping)
-end
-
--- Chooses one route, clearing the other choices: routeShown, a feature's route (toggleRoute), or a button's
--- plan (solving or mapping).
-chooseRoute = function(routeShown, solving, mapping)
-    newRedraw()
-    parts.routeShown, parts.solving, parts.mapping = routeShown, solving, mapping
-    local feature = parts.routeFeatureOf[routeShown]
-    parts.routeWaitsFor = feature ~= nil and ForestStops.isWorkLeft(feature) and feature or nil
-    showLegendStates()
-    drawRoutes(true)
+    showButton(parts.solveButton, RouteChoice.solving)
+    showButton(parts.mapRouteButton, RouteChoice.mapping)
 end
 
 local function layoutNodeLegend(box)
@@ -1315,9 +1024,8 @@ local function layoutNodeLegend(box)
     local rowsHeight = box.height - (shows.mapRoute and MAP_ROUTE_HEIGHT or 0)
     local simple = shows.simpleLegends
     local showsTexts = showsLegend and not simple
-    local headingFontEntry = fittingFont(HEADING_FONTS, parts.legendTitles, math.max(1, legendWidth - 16))
-    local headingHeight = simple and 0 or headingFontEntry.size + HEADING_PADDING * 2
-    local rowsShown, headingsShown = legendRowsShown(shows)
+    local headingHeight, headingFontEntry = legendHeading(legendWidth)
+    local rowsShown, headingsShown = legendRowsShown()
     local rowHeight = rowsShown > 0 and (rowsHeight - headingHeight * headingsShown) / rowsShown or 0
     -- Kept so the legend's own window can keep its rows as tall when rows come or go.
     if rowsShown > 0 then parts.nodeRowHeight = rowHeight end
@@ -1326,7 +1034,7 @@ local function layoutNodeLegend(box)
     local skillWidth = math.min(44, rowHeight * 1.2, legendWidth * 0.16)
     local nameWidth = legendWidth - iconWidth - skillWidth - 24
     -- Names use the largest font the widest name fits, no taller than its share of a row.
-    local nameFontEntry = fittingFont(NAME_FONTS, parts.legendNames, math.max(1, nameWidth), rowHeight * NAME_TO_ROW)
+    local nameFontEntry = fittingFont(NAME_FONTS, LEGEND_NAMES, math.max(1, nameWidth), rowHeight * NAME_TO_ROW)
     -- Fonts are written only when they change, as this runs on every step of a resize.
     local headingFontChanged, nameFontChanged = parts.headingFont ~= headingFontEntry, parts.nameFont ~= nameFontEntry
     parts.headingFont, parts.nameFont = headingFontEntry, nameFontEntry
@@ -1341,7 +1049,7 @@ local function layoutNodeLegend(box)
         for index = nextRow, nextRow + heading.rowCount - 1 do
             local row = parts.legendRows[index]
             -- The outline and red cover are shown or hidden by showLegendStates, which follows.
-            local rowShown = legendRowShown(row.feature, headingIndex, shows)
+            local rowShown = legendRowShown(row.feature, headingIndex)
             row.isShown = showsLegend and rowShown
             setAllHidden(not row.isShown, row.cell, row.icon)
             setAllHidden(not showsTexts or not rowShown, row.name, row.skill)
@@ -1411,7 +1119,7 @@ local function layoutPuzzleLegend(box)
         local middle = box.left + (index - 0.5) * box.pairWidth
         local iconBox = math.min(math.max(54, iconHeight), box.pairWidth / 2 - 12)
         local showsDoorAlone = simple and held[pair.toolPair.source.key] == true
-        setAllHidden(not showsPuzzle, pair.cell)
+        setHidden(pair.cell, not showsPuzzle)
         setHidden(pair.source, not showsPuzzle or showsDoorAlone)
         setHidden(pair.barrier, not showsPuzzle or (simple and not showsDoorAlone))
         setHidden(pair.label, not showsPuzzle or (simple and not pair.isKeyUnseen))
@@ -1447,39 +1155,48 @@ local function layoutPuzzleLegend(box)
     parts.puzzleBox = box
 end
 
-local function poppedBox(host)
-    local root = host.window.root
-    return { left = 0, top = 0, width = root.width - WINDOW_EDGE_WIDTH, height = root.height - WINDOW_EDGE_HEIGHT }
-end
-
+-- Lays out a legend in its own window (host): the frame's colour behind it, the node legend's border, and its
+-- overlay.
 local function layoutPopped(host)
     if parts.frame == nil then return end
-    local box = poppedBox(host)
+    local root = host.window.root
+    local box = { left = 0, top = 0, width = root.width - WINDOW_EDGE_WIDTH, height = root.height - WINDOW_EDGE_HEIGHT }
+    host.chrome:Clear()
+    host.chrome:AddRectangle(0, 0, box.width, box.height, FRAME_COLOUR)
+    host.overlay:Clear()
     if host == parts.nodeHost then
         layoutNodeLegend(box)
-        drawPopped(host, box, drawNodeOverlay)
+        host.chrome:AddOutline(box.left, box.top, box.width, box.height, 1, FRAME_LINE_COLOUR)
+        drawNodeOverlay(host.overlay, box)
     else
         layoutPuzzleLegend(box)
-        drawPopped(host, box, drawPuzzleOverlay)
+        drawPuzzleOverlay(host.overlay, box)
     end
     showLegendStates()
 end
 
--- Hides a window without destroying it. will be removed with pretty ui 1.3.0's support for hiding windows.
+-- Hides a window without destroying it, as PrettyUI's Close does without destroyOnClose.
+-- PrettyUI 1.4.0's Window:Hide will replace it.
 local function hideWindow(window)
     window.root.hidden = true
     if window.titleDrag then window.titleDrag.hidden = true end
-    if window == parts.window and parts.sharingButton ~= nil then parts.sharingButton:hide() end
+    window:_SyncOverlays(true)
+end
+
+local function legendWindowShown()
+    for _, host in ipairs({ parts.nodeHost, parts.puzzleHost }) do
+        if host.window ~= nil and host.window.root.hidden ~= true then return true end
+    end
+    return false
 end
 
 local function showPoppedWindows()
-    local mapShown = parts.window.root.hidden ~= true
     for _, host in ipairs({ parts.nodeHost, parts.puzzleHost }) do
         local window = host.window
         if window ~= nil then
             local legendShown = parts.puzzleShown
             if host == parts.nodeHost then legendShown = parts.legendShown end
-            local shown = mapShown and not parts.closedPopped[window] and legendShown
+            local shown = not parts.closedPopped[window] and legendShown
             if shown and window.root.hidden == true then
                 window:Show()
             elseif not shown and window.root.hidden ~= true then
@@ -1493,7 +1210,7 @@ end
 local function layout(contentWidth, contentHeight, isResize)
     -- A part shown again (the puzzle legend in a new forest, the header in map sharing mode) can raise the minimum.
     -- The window then grows to it, and SetSize lays it out again, as a resize only if this layout was one.
-    local minimumWidth, minimumHeight = minimumSize()
+    local minimumWidth, minimumHeight = fittedWindowSize(MINIMUM_MAP_SIZE)
     if parts.window.minWidth ~= minimumWidth or parts.window.minHeight ~= minimumHeight then
         setMinimumSize(parts.window, minimumWidth, minimumHeight)
         local windowWidth, windowHeight = contentWidth + WINDOW_EDGE_WIDTH, contentHeight + WINDOW_EDGE_HEIGHT
@@ -1509,11 +1226,11 @@ local function layout(contentWidth, contentHeight, isResize)
     parts.headerShown = showsHeader
     local nodePopped, puzzlePopped = parts.nodeHost.window ~= nil, parts.puzzleHost.window ~= nil
     local legendInFrame, puzzleInFrame = showsLegend and not nodePopped, showsPuzzle and not puzzlePopped
-    local puzzleLegendTall = puzzleLegendHeight(shows)
+    local puzzleLegendTall = puzzleLegendHeight()
     local puzzleHeight = puzzleInFrame and puzzleLegendTall + EDGE or 0
     local headerHeight = showsHeader and HEADER_HEIGHT or EDGE
     local widthRoom = contentWidth - EDGE * 2 - (legendInFrame and EDGE or 0)
-    local legendMinimumWidth = legendMinimumWidthFor(shows)
+    local leastLegendWidth = legendMinimumWidth()
     -- The legend is a share of the map's width but kept between its least and greatest widths, so the map takes
     -- what the legend leaves of the width.
     local mapWidth = widthRoom
@@ -1521,19 +1238,19 @@ local function layout(contentWidth, contentHeight, isResize)
     if legendInFrame and shows.simpleLegends then
         -- A simplified legend's width follows the rows' height, so the map's size is found by a few rounds of
         -- giving the map what the legend for that size leaves. Each round moves less than the last.
-        mapWidth = math.min(heightLimit, widthRoom - legendMinimumWidth)
-        for _ = 1, 4 do mapWidth = math.min(heightLimit, widthRoom - legendWidthFor(math.floor(mapWidth), shows)) end
+        mapWidth = math.min(heightLimit, widthRoom - leastLegendWidth)
+        for _ = 1, 4 do mapWidth = math.min(heightLimit, widthRoom - legendWidthFor(math.floor(mapWidth))) end
     elseif legendInFrame then
-        mapWidth = math.min(widthRoom - legendMinimumWidth,
+        mapWidth = math.min(widthRoom - leastLegendWidth,
             math.max(widthRoom - LEGEND_MAXIMUM_WIDTH, widthRoom / (1 + LEGEND_TO_MAP)))
     end
     local mapSize = math.floor(math.min(heightLimit, mapWidth))
     local legendWidth = 0
     if legendInFrame and shows.simpleLegends then
-        legendWidth = math.min(legendWidthFor(mapSize, shows), widthRoom - mapSize)
+        legendWidth = math.min(legendWidthFor(mapSize), widthRoom - mapSize)
     elseif legendInFrame then
         -- rounded up like the fitted width, so a fitted window shows no slack beside the legend
-        legendWidth = clampedLegendWidth(math.min(mapSize * LEGEND_TO_MAP, widthRoom - mapSize), legendMinimumWidth)
+        legendWidth = clampedLegendWidth(math.min(mapSize * LEGEND_TO_MAP, widthRoom - mapSize), leastLegendWidth)
     end
     local frame = {
         width = EDGE * 2 + mapSize + (legendInFrame and legendWidth + EDGE or 0),
@@ -1558,16 +1275,15 @@ local function layout(contentWidth, contentHeight, isResize)
 
     -- A node legend window's height follows its rows: when rows come or go (nodes claimed, another setting), each
     -- row keeps its height, so the window shrinks or grows by the rows'.
-    local rowsNow, headingsNow, hiddenRows = legendRowsShown(shows)
+    local rowsNow, headingsNow, hiddenRows = legendRowsShown()
     parts.hiddenRowsKey = hiddenRows
     if nodePopped then
         local window = parts.nodeHost.window
-        local headingHeight = shows.simpleLegends and 0 or fittingFont(HEADING_FONTS, parts.legendTitles,
-            math.max(1, window.root.width - WINDOW_EDGE_WIDTH - 16)).size + HEADING_PADDING * 2
+        local headingHeight = legendHeading(window.root.width - WINDOW_EDGE_WIDTH)
         local fixedHeight = (shows.mapRoute and MAP_ROUTE_HEIGHT or 0) + headingHeight * headingsNow
             + WINDOW_EDGE_HEIGHT
         local leastHeight = fixedHeight + rowsNow * LEAST_LEGEND_ROW_HEIGHT
-        local leastWidth = poppedNodeLegendWidth(leastHeight - WINDOW_EDGE_HEIGHT, shows) + WINDOW_EDGE_WIDTH
+        local leastWidth = poppedNodeLegendWidth(leastHeight - WINDOW_EDGE_HEIGHT) + WINDOW_EDGE_WIDTH
         setMinimumSize(window, leastWidth, leastHeight)
         local height = window.root.height
         if parts.nodeRowHeight ~= nil and rowsNow ~= parts.nodeRowCount then
@@ -1604,16 +1320,15 @@ local function layout(contentWidth, contentHeight, isResize)
             height = puzzleLegendTall })
     end
     setBox(parts.overlay, 0, 0, contentWidth, contentHeight)
-    drawChrome()
-    drawOverlay()
+    drawFrame()
     showPoppedWindows()
     parts.zonesShown = nil -- place every zone again at the new size
-    showFound(isResize)
+    showFound()
 end
 
 -- Builds the map's components in drawing order: the frame's panels, then the map layer with the zones, routes, found
 -- features, entrance signs and the player clipped at its edges, then the compass, texts and legends on the frame.
-local function build()
+local function build(nodeWindow, puzzleWindow)
     local content = parts.window.content
     parts.chrome = create(ui.Canvas, content)
     parts.map = create(ui.Layer, content)
@@ -1631,7 +1346,7 @@ local function build()
     end
     -- A click on a sign chooses or drops the route to its opening.
     parts.signs = {}
-    for _, sign in ipairs(ENTRANCE_SIGNS) do
+    for _, sign in ipairs(ForestFeatures.entranceSigns) do
         local shown = { key = sign.key, side = sign.side, sprite = addIcon(signLayer, sign.key) }
         makeRoutable(shown.sprite, shown, function() return sign.key end)
         parts.signs[#parts.signs + 1] = shown
@@ -1658,7 +1373,7 @@ local function build()
         if window == nil then return { content = content, chrome = parts.chrome } end
         return { window = window, content = window.content, chrome = create(ui.Canvas, window.content) }
     end
-    parts.nodeHost, parts.puzzleHost = hostIn(parts.nodeWindow), hostIn(parts.puzzleWindow)
+    parts.nodeHost, parts.puzzleHost = hostIn(nodeWindow), hostIn(puzzleWindow)
 
     -- Adds a legend entry's cell, its click target: a filled rectangle under the entry's icons,
     -- which pass clicks through.
@@ -1712,25 +1427,19 @@ local function build()
         end)
         button.cell:Subscribe(ui.Hook.ONMOUSELEAVE, function() showButton(button, button.isDown) return true end)
         button.text = addText(content, TEXT_FONT, TEXT_COLOUR, ui.AlignMode.CENTRE, label)
-        if PATHS_ICON_SPRITE ~= nil then
-            button.icon = addGameSprite(content, PATHS_ICON_SPRITE)
-            button.icon.hidden = true
-        end
+        if PATHS_ICON_SPRITE ~= nil then button.icon = addGameSprite(content, PATHS_ICON_SPRITE) end
         return button
     end
 
     -- The node and task legend. Its NAVIGATE button plans a route through every node not claimed today.
     content = parts.nodeHost.content
-    parts.legendHeadings, parts.legendRows, parts.legendTitles, parts.legendNames = {}, {}, {}, {}
-    parts.routeFeatureOf = {} -- key -> the legend row's feature or the puzzle's key, which a route can be chosen to
-    local legends = { { "SKILL NODES", ForestFeatures.nodes }, { "TRINKS' TASKS", ForestFeatures.trinksTasks } }
-    for _, legend in ipairs(legends) do
+    parts.legendHeadings, parts.legendRows = {}, {}
+    for listIndex, list in ipairs(LEGEND_LISTS) do
         parts.legendHeadings[#parts.legendHeadings + 1] = {
-            text = addText(content, TEXT_FONT, HEADING_COLOUR, ui.AlignMode.CENTRE, legend[1]),
-            rowCount = #legend[2],
+            text = addText(content, TEXT_FONT, HEADING_COLOUR, ui.AlignMode.CENTRE, LEGEND_TITLES[listIndex]),
+            rowCount = #list,
         }
-        parts.legendTitles[#parts.legendTitles + 1] = legend[1]
-        for _, feature in ipairs(legend[2]) do
+        for _, feature in ipairs(list) do
             local row = { feature = feature, nameText = feature.name:upper() }
             local function cannotRoute() return not row.canRoute end
             row.cell = addCell(content, feature.key, cannotRoute)
@@ -1738,12 +1447,13 @@ local function build()
             if feature.kind == "node" and WINDOW_BACKGROUND_SPRITE ~= nil then
                 row.claimedBackground = addGameSprite(content, WINDOW_BACKGROUND_SPRITE)
                 row.claimedBackground.isTiling = true
-                row.claimedBackground.hidden = true
             end
             row.icon = addIcon(content, feature.key)
             -- centred between the icon and the skill symbol
             row.name = addText(content, TEXT_FONT, TEXT_COLOUR, ui.AlignMode.CENTRE, row.nameText)
-            local skillSprite = feature.skill and skillSpriteOf(feature.skill)
+            -- the game's skill icons; the SKILL_<skill> sprites are the daily tasks' set, not these
+            local skillSprite = feature.skill
+                and GameIds.resolve("Sprite", "HITMARK_ICON_SKILL_" .. feature.skill:upper())
             if skillSprite ~= nil then
                 row.skill = create(ui.Sprite, content)
                 row.skill.spriteID = skillSprite
@@ -1752,26 +1462,22 @@ local function build()
             row.missing = create(ui.Rectangle, content)
             row.missing.fill = true
             row.missing.rgba = MISSING_COLOUR
-            row.missing.hidden = true
             row.outline = addOutline(content, ForestFeatures.colourOf(feature))
             row.hover = addHover(content, row.cell, cannotRoute)
             parts.legendRows[#parts.legendRows + 1] = row
-            parts.legendNames[#parts.legendNames + 1] = row.nameText
-            parts.routeFeatureOf[feature.key] = feature
         end
     end
     -- The buttons' plans need the player in the forest, so they do nothing outside it.
     parts.mapRouteButton = addButton(content, "NAVIGATE", function()
-        if Forest.isInside then chooseRoute(nil, false, not parts.mapping) end
+        if Forest.isInside then chooseRoute(nil, false, not RouteChoice.mapping) end
     end)
-    if parts.nodeWindow ~= nil then parts.nodeHost.overlay = create(ui.Canvas, content) end
+    if nodeWindow ~= nil then parts.nodeHost.overlay = create(ui.Canvas, content) end
 
     -- The puzzle legend. Its SOLVE button plans a route through every key and barrier.
     content = parts.puzzleHost.content
     parts.puzzlePairs = {}
     for _, toolPair in ipairs(ForestFeatures.tools) do
         local pair = { toolPair = toolPair }
-        parts.routeFeatureOf[toolPair.source.key] = toolPair.source
         local function cannotRoute() return not pair.canRoute end
         pair.cell = addCell(content, toolPair.source.key, cannotRoute)
         pair.source = addIcon(content, toolPair.source.key)
@@ -1781,23 +1487,22 @@ local function build()
         pair.hover = addHover(content, pair.cell, cannotRoute)
         parts.puzzlePairs[#parts.puzzlePairs + 1] = pair
     end
-    if parts.puzzleWindow ~= nil then parts.puzzleHost.overlay = create(ui.Canvas, content) end
+    if puzzleWindow ~= nil then parts.puzzleHost.overlay = create(ui.Canvas, content) end
     -- The frame's overlay covers the legends in the frame, so it is made after them.
     parts.overlay = create(ui.Canvas, parts.window.content)
     parts.solveButton = addButton(content, "SOLVE", function()
-        if Forest.isInside then chooseRoute(nil, not parts.solving, false) end
+        if Forest.isInside then chooseRoute(nil, not RouteChoice.solving, false) end
     end)
-    parts.plans = {}
 end
 
 -- The legends' own windows.
 -- Each opens beside the map the first time (the puzzle legend's under it), and keeps its place and size after.
 local LEGEND_DEFAULT_WIDTH = clampedLegendWidth(DEFAULT_MAP_SIZE * LEGEND_TO_MAP, LEGEND_MINIMUM_WIDTH)
 local POPPED_WINDOWS = {
-    { part = "nodeWindow", place = "nodeLegend", title = "Node legend",
+    { host = "nodeHost", place = "nodeLegend", title = "Node legend",
         width = LEGEND_DEFAULT_WIDTH + WINDOW_EDGE_WIDTH, defaultHeight = DEFAULT_MAP_SIZE + WINDOW_EDGE_HEIGHT,
         minWidth = LEGEND_MINIMUM_WIDTH + WINDOW_EDGE_WIDTH, minHeight = MINIMUM_MAP_SIZE + WINDOW_EDGE_HEIGHT },
-    { part = "puzzleWindow", place = "puzzleLegend", title = "Puzzle legend",
+    { host = "puzzleHost", place = "puzzleLegend", title = "Puzzle legend",
         width = EDGE + DEFAULT_MAP_SIZE + LEGEND_DEFAULT_WIDTH + WINDOW_EDGE_WIDTH,
         under = true, minWidth = PUZZLE_WINDOW_LEAST_WIDTH }, -- openPopped sets its height
 }
@@ -1808,16 +1513,14 @@ local function release()
     WindowPlace.remember(parts.window.root, "map")
     if parts.sharingButton ~= nil then parts.sharingButton:destroy() end
     for _, popped in ipairs(POPPED_WINDOWS) do
-        local window = parts[popped.part]
+        local window = parts[popped.host] and parts[popped.host].window
         if window ~= nil then
             WindowPlace.remember(window.root, popped.place)
             window:Destroy()
         end
     end
     parts = nil
-    stopWaitingForFinalRoute()
-    Highlights.beamOn(nil)
-    Highlights.showRoute(nil)
+    Event.ServerLogic.Unsubscribe(FINAL_ROUTE_SUBSCRIPTION)
     Event.Draw.Unsubscribe(RESIZE_END_SUBSCRIPTION)
 end
 
@@ -1848,41 +1551,32 @@ end
 -- Draw is watched only during a drag.
 local function fitAfterResize()
     if not isLaidOut() then return Event.Draw.Unsubscribe(RESIZE_END_SUBSCRIPTION) end
-    local resize = parts.window.resize
-    if resize ~= nil and resize.dragState ~= nil then return end
+    if parts.window.resize.dragState ~= nil then return end
     Event.Draw.Unsubscribe(RESIZE_END_SUBSCRIPTION)
     fitWindowTo(parts.frame.mapSize)
 end
 
--- Builds the map again with its legends where the settings now put them, keeping the route chosen and the map's
--- size: the window shrinks as a legend leaves it for its own window, and grows as it comes back.
+-- Builds the map again with its legends where the settings now put them, keeping the map's size: the window shrinks
+-- as a legend leaves it for its own window, and grows as it comes back.
 local function rebuild()
-    local routeShown, solving, mapping = parts.routeShown, parts.solving, parts.mapping
-    local hidden, mapSize = parts.window.root.hidden == true, parts.frame.mapSize
-    local PrettyUI, pluginLayer = parts.PrettyUI, parts.pluginLayer
+    local mapSize, PrettyUI, pluginLayer = parts.frame.mapSize, parts.PrettyUI, parts.pluginLayer
     MapWindow.close()
-    MapWindow.open(PrettyUI, pluginLayer, hidden)
-    if not isLaidOut() then return end
-    fitWindowTo(mapSize)
-    if routeShown ~= nil or solving or mapping then chooseRoute(routeShown, solving, mapping) end
-end
-
--- Fits the node legend's own window to the legend's width at the window's height, leaving no room beside a
--- simplified legend's pictures.
-local function fitNodeWindow()
-    local window = parts.nodeWindow
-    local legendHeight = window.root.height - WINDOW_EDGE_HEIGHT
-    local width = poppedNodeLegendWidth(legendHeight, view()) + WINDOW_EDGE_WIDTH
-    window:SetSize(math.max(width, window.minWidth), window.root.height)
+    MapWindow.open(PrettyUI, pluginLayer)
+    if isLaidOut() then fitWindowTo(mapSize) end
 end
 
 -- Shrinks or grows the legends' own windows with their legends when simplified legends are turned on or off.
--- The node legend's fits its legend. The puzzle legend's changes by what the legend gains or loses (SOLVE's column and
--- the line of names) from its size before (puzzleSize).
+-- The node legend's fits its legend's width at the window's height, leaving no room beside a simplified legend's
+-- pictures. The puzzle legend's changes by what the legend gains or loses (SOLVE's column and the line of names) from
+-- its size before (puzzleSize).
 local function fitPoppedWindows(puzzleSize)
     local simple = view().simpleLegends
-    if parts.nodeWindow ~= nil then fitNodeWindow() end
-    local window = parts.puzzleWindow
+    local window = parts.nodeHost.window
+    if window ~= nil then
+        local width = poppedNodeLegendWidth(window.root.height - WINDOW_EDGE_HEIGHT) + WINDOW_EDGE_WIDTH
+        window:SetSize(math.max(width, window.minWidth), window.root.height)
+    end
+    window = parts.puzzleHost.window
     if window ~= nil then
         local sign = simple and -1 or 1
         local widthChange = PATHS_ICON_SPRITE ~= nil and SOLVE_BUTTON_WIDTH - SIMPLE_SOLVE_BUTTON_WIDTH or 0
@@ -1893,20 +1587,19 @@ end
 
 -- Opens a legend's own window.
 -- Its X hides it until the map is opened again; the legend stays out of the map.
+-- With the map hidden, the last one closed closes the map.
 local function openPopped(popped)
     local mapRoot, pluginLayer = parts.window.root, parts.pluginLayer
-    local width = math.min(Settings[popped.place .. "Width"] or popped.width, pluginLayer.width)
     -- The puzzle legend's window is as high as the legend in the frame, at least and at first.
     local minimumHeight, defaultHeight = popped.minHeight, popped.defaultHeight
     if popped.under then
-        minimumHeight = puzzleLegendHeight(view()) + WINDOW_EDGE_HEIGHT
+        minimumHeight = puzzleLegendHeight() + WINDOW_EDGE_HEIGHT
         defaultHeight = minimumHeight
     end
-    local height = math.min(Settings[popped.place .. "Height"] or defaultHeight, pluginLayer.height)
     local besideX, besideY = mapRoot.x + mapRoot.width, mapRoot.y
     if popped.under then besideX, besideY = mapRoot.x, mapRoot.y + mapRoot.height end
-    local x, y = WindowPlace.position(pluginLayer, width, height, Settings[popped.place .. "X"] or besideX,
-        Settings[popped.place .. "Y"] or besideY)
+    local x, y, width, height = WindowPlace.restore(pluginLayer, popped.place, popped.width, defaultHeight, nil,
+        besideX, besideY)
     local window = parts.PrettyUI.Window.new(pluginLayer, {
         title = popped.title, x = x, y = y, width = width, height = height,
         minWidth = popped.minWidth, minHeight = minimumHeight,
@@ -1914,36 +1607,32 @@ local function openPopped(popped)
     })
     window.Close = function(closingWindow)
         hideWindow(closingWindow)
-        if parts ~= nil then parts.closedPopped[closingWindow] = true end
+        if parts == nil then return end
+        parts.closedPopped[closingWindow] = true
+        if parts.window.root.hidden == true and not legendWindowShown() then MapWindow.close() end
     end
     local setWindowSize = window.SetSize
     window.SetSize = function(resizedWindow, newWidth, newHeight)
         setWindowSize(resizedWindow, newWidth, newHeight)
-        local host = parts ~= nil and (popped.part == "nodeWindow" and parts.nodeHost or parts.puzzleHost)
-        if host and host.window == resizedWindow then layoutPopped(host) end
+        local host = parts ~= nil and parts[popped.host]
+        if host then layoutPopped(host) end
     end
     return window
 end
 
 -- Opens the map, or brings it to the front if open.
--- With hidden, it opens unseen for route guidance with the map setting off, since guidance (the plan, the ground route,
--- the beam and the box) runs in the map.
-function MapWindow.open(PrettyUI, pluginLayer, hidden)
+function MapWindow.open(PrettyUI, pluginLayer)
     if isOpen() then
-        if not hidden then
-            parts.window:Show()
-            -- Opening the map again brings back the legend windows closed since.
-            parts.closedPopped = {}
-            if parts.frame ~= nil then showPoppedWindows() end
-        end
+        parts.window:Show()
+        -- Opening the map again brings back the legend windows closed since.
+        parts.closedPopped = {}
+        if parts.frame ~= nil then showPoppedWindows() end
         return
     end
     newRedraw()
-    local minimumWidth, minimumHeight = minimumSize()
+    local minimumWidth, minimumHeight = fittedWindowSize(MINIMUM_MAP_SIZE)
     local defaultWidth, defaultHeight = fittedWindowSize(DEFAULT_MAP_SIZE)
-    local width = math.min(Settings.mapWidth or defaultWidth, pluginLayer.width)
-    local height = math.min(Settings.mapHeight or defaultHeight, pluginLayer.height)
-    local x, y = WindowPlace.position(pluginLayer, width, height, Settings.mapX, Settings.mapY)
+    local x, y, width, height = WindowPlace.restore(pluginLayer, "map", defaultWidth, defaultHeight)
     local hasPictures = picture("chest") ~= nil
     local window = PrettyUI.Window.new(pluginLayer, {
         title = "Nemi Forest map", x = x, y = y, width = width, height = height,
@@ -1951,20 +1640,14 @@ function MapWindow.open(PrettyUI, pluginLayer, hidden)
         resizable = hasPictures, scrollable = false, destroyOnClose = true,
         onClose = release, -- on the X; the window then destroys itself
     })
-    parts = { window = window, hiddenOf = {}, boxOf = {}, textWidths = {}, closedPopped = {},
+    parts = { window = window, hiddenOf = {}, boxOf = {}, textWidths = {}, closedPopped = {}, stopsShown = EMPTY,
         PrettyUI = PrettyUI, pluginLayer = pluginLayer }
-    -- The X only hides the window while a route is followed in the forest, so the route, beam and box carry on.
+    -- The X only hides the map while a legend's own window is shown, so that window stays open until its own X.
     local closeWindow = window.Close
     window.Close = function(closingWindow)
-        if parts ~= nil and parts.frame ~= nil and Forest.isInside and routeChosen() then
-            hideWindow(closingWindow)
-            showPoppedWindows()
-        else
-            closeWindow(closingWindow)
-        end
+        if parts ~= nil and legendWindowShown() then hideWindow(closingWindow) else closeWindow(closingWindow) end
     end
-    parts.sharingButton = SharingButton.add(window, pluginLayer,
-        function() return parts ~= nil and parts.window.root.hidden ~= true end,
+    parts.sharingButton = SharingButton.add(window, pluginLayer, function() return parts ~= nil end,
         function() MapWindow.onSharingToggled() end)
     if not hasPictures then
         window:AddText("The map pictures are not loaded. Run plugins_scan in the client console, then reload "
@@ -1972,9 +1655,8 @@ function MapWindow.open(PrettyUI, pluginLayer, hidden)
         return
     end
     local shows = view()
-    if shows.nodeLegendPopped then parts.nodeWindow = openPopped(POPPED_WINDOWS[1]) end
-    if shows.puzzleLegendPopped then parts.puzzleWindow = openPopped(POPPED_WINDOWS[2]) end
-    build()
+    build(shows.nodeLegendPopped and openPopped(POPPED_WINDOWS[1]) or nil,
+        shows.puzzleLegendPopped and openPopped(POPPED_WINDOWS[2]) or nil)
     -- A window's content takes its new size a moment after a resize, so the layout uses the size passed to
     -- SetSize, which PrettyUI's resize handle calls on each step of a drag.
     local setWindowSize = window.SetSize
@@ -1983,7 +1665,7 @@ function MapWindow.open(PrettyUI, pluginLayer, hidden)
         setWindowSize(resizedWindow, newWidth, newHeight)
         layout(math.max(resizedWindow.minWidth, math.floor(newWidth)) - WINDOW_EDGE_WIDTH,
             math.max(resizedWindow.minHeight, math.floor(newHeight)) - WINDOW_EDGE_HEIGHT, asResize ~= false)
-        if resizedWindow.resize ~= nil and resizedWindow.resize.dragState ~= nil then
+        if resizedWindow.resize.dragState ~= nil then
             Event.Draw.Subscribe(RESIZE_END_SUBSCRIPTION, fitAfterResize)
         end
     end
@@ -1993,10 +1675,6 @@ function MapWindow.open(PrettyUI, pluginLayer, hidden)
     -- The saved size was fitted to the frame as it was. Settings changed since (a legend hidden, the header) would
     -- leave background around the map, so the window is fitted around the map as laid out now.
     fitWindowTo(parts.frame.mapSize)
-    if hidden then
-        hideWindow(window)
-        showPoppedWindows()
-    end
 end
 
 -- Called when the forest changes: a find, a claim, a follower, the grid or the search ending.
@@ -2004,13 +1682,12 @@ function MapWindow.showForest()
     if isLaidOut() then showForest() end
 end
 
--- Called when a found NPC (entry) moves: its marker follows, and the route is redrawn when it leads to that NPC.
--- A plan keeps its target.
+-- Called when a found NPC (entry) moves: its marker follows, and so does a route leading to it.
 function MapWindow.showNpcMoved(entry)
     if not isLaidOut() then return end
     newRedraw()
     placeMarkers()
-    if parts.routeDrawn ~= nil and parts.routeDrawn.target == entry then drawRoutes() end
+    if RouteChoice.drawn ~= nil and RouteChoice.drawn.target == entry then paintRoutes() end
 end
 
 -- Called when the backpack or worn items change without a step: only the tools held can have
@@ -2024,9 +1701,7 @@ end
 -- Called when the forest is left: it is gone, so the map shows none entered.
 function MapWindow.showForestLeft()
     finalRouteOf = nil
-    if not isLaidOut() then return end
-    dropRouteChoice()
-    showForest()
+    if isLaidOut() then showForest() end
 end
 
 -- Called when the player's tile changes: the player marker and the routes follow.
@@ -2035,22 +1710,23 @@ function MapWindow.showPlayer()
     newRedraw()
     showPlayer()
     if not showHeldChange() then
-        -- The final route starts at the opening nearer the player's first tile, so it waits for a step.
-        if routeChosen() then
-            followRoute(Forest.playerTile)
+        -- A route drawn may have ended (its plan done); the final route starts at the opening nearer the player's
+        -- first tile, so it waits for a step.
+        if RouteChoice.isChosen() or parts.routePainted then
+            showRoute()
         elseif view().finalRoute and (finalRouteOf == nil or finalRouteOf.entry ~= Forest.entryTile) then
-            drawRoutes(true)
+            paintRoutes()
         end
     end
     -- The world is readable only while the friends list is open, so it is checked on each step until known.
     if parts.world == nil and Forest.bounds ~= nil and WorldNumber.read() ~= nil then showCountText() end
 end
 
--- Called when a route setting changes: the final route on the map, or the chosen route on the ground.
+-- Called when the route chosen or a route setting changes outside the map.
 function MapWindow.showRoutes()
     if not isLaidOut() then return end
     newRedraw()
-    drawRoutes()
+    showRoute()
 end
 
 -- Shows the header text setting.
@@ -2070,19 +1746,16 @@ end
 -- The legends, header and buttons may come or go, so the frame is laid out again.
 function MapWindow.showSettings()
     if not isLaidOut() then return end
-    -- A shared map shows the final route.
-    -- A chosen route would replace it, and NAVIGATE's or SOLVE's would have no button left to turn it off.
-    if Settings.mapSharingMode then dropRouteChoice() end
     if parts.sharingButton ~= nil then parts.sharingButton:show() end
     showHeaderText()
     newRedraw()
     local shows = view()
-    if shows.nodeLegendPopped ~= (parts.nodeWindow ~= nil) or shows.puzzleLegendPopped ~= (parts.puzzleWindow ~= nil)
-    then
+    local nodeWindow, puzzleWindow = parts.nodeHost.window, parts.puzzleHost.window
+    if shows.nodeLegendPopped ~= (nodeWindow ~= nil) or shows.puzzleLegendPopped ~= (puzzleWindow ~= nil) then
         return rebuild()
     end
     local wasSimple, mapSize = parts.simpleShown, parts.frame.mapSize
-    local puzzleRoot = parts.puzzleWindow ~= nil and parts.puzzleWindow.root
+    local puzzleRoot = puzzleWindow ~= nil and puzzleWindow.root
     local puzzleSize = puzzleRoot and { puzzleRoot.width, puzzleRoot.height }
     local fitted = layoutFitting()
     -- Simplified legends take less room too, so the window and the legends' own windows are fitted to them.
@@ -2092,18 +1765,9 @@ function MapWindow.showSettings()
     end
 end
 
-function MapWindow.startMapping()
-    if not isLaidOut() or parts.mapping or not view().mapRoute then return end
-    chooseRoute(nil, false, true)
-end
-
-MapWindow.isOpen = isOpen
-
-function MapWindow.hideOrClose()
-    if isOpen() then parts.window:Close() end
-end
-
-function MapWindow.isShown()
+-- Returns whether the map is open and shown.
+-- Its X only hides it while a legend's own window is shown.
+function MapWindow.isOpen()
     return isOpen() and parts.window.root.hidden ~= true
 end
 

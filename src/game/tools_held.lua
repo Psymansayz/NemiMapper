@@ -22,9 +22,9 @@ end
 local heldBefore = {} -- source key -> true: tools held at the last update
 local usedAt = {} -- source key -> the server tick its tool was used on its barrier
 
--- Returns the barrier of sourceKey's puzzle if it still stands near playerTile.
-local function barrierNear(sourceKey, playerTile)
-    local barrier = barrierOfSourceKey[sourceKey]
+-- Returns the barrier of sourceKey's puzzle if it still stands near the player.
+local function barrierNear(sourceKey)
+    local barrier, playerTile = barrierOfSourceKey[sourceKey], Forest.playerTile
     if Forest.doorsGone[barrier.key] then return nil end
     for _, entry in ipairs(Forest.found) do
         if entry.feature == barrier and math.abs(entry.x - playerTile.x - 0.5) - entry.width / 2 <= USED_BY
@@ -33,11 +33,6 @@ local function barrierNear(sourceKey, playerTile)
         end
     end
     return nil
-end
-
--- Returns whether a tool used at tick is still opening its barrier.
-local function isOpening(sourceKey, tick)
-    return not Forest.doorsGone[barrierOfSourceKey[sourceKey].key] and Forest.ticks - tick <= OPENING_TICKS
 end
 
 -- Returns the tools in the backpack, worn or following, by source key.
@@ -50,11 +45,11 @@ local function toolsCarried()
     return held
 end
 
--- Notes the tools just lost beside their barriers, on each step and inventory change; playerTile: { x, z }.
-function ToolsHeld.update(playerTile)
+-- Notes the tools just lost beside their barriers, on each inventory change.
+function ToolsHeld.update()
     local held = toolsCarried()
     for sourceKey in pairs(heldBefore) do
-        if not held[sourceKey] and barrierNear(sourceKey, playerTile) then usedAt[sourceKey] = Forest.ticks end
+        if not held[sourceKey] and barrierNear(sourceKey) then usedAt[sourceKey] = Forest.ticks end
     end
     heldBefore = held
 end
@@ -64,7 +59,8 @@ end
 function ToolsHeld.sourceKeys()
     local held = toolsCarried()
     for sourceKey, tick in pairs(usedAt) do
-        if isOpening(sourceKey, tick) then held[sourceKey] = true end
+        local barrier = barrierOfSourceKey[sourceKey]
+        if not Forest.doorsGone[barrier.key] and Forest.ticks - tick <= OPENING_TICKS then held[sourceKey] = true end
     end
     return held
 end

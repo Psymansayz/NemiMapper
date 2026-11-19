@@ -24,14 +24,15 @@ dependency, see `plugin.json`). The `main` branch is the release; `dev` has the 
 | | `routes.lua` | Searches over the grid: the route to a target, the final route, the walk toward the centre. |
 | | `solve_plan.lua` | Chooses a plan's next stop from the shortest tour, and which keys and doors a tour needs. |
 | | `forest_stops.lua` | Turns found features into stops for the plans, and caches NAVIGATE's stops. |
-| | `tools_held.lua` | Which puzzle tools the player has; `update` (on each step and inventory change) notes a tool used on its barrier. |
+| | `route_choice.lua` | The route chosen (a click, NAVIGATE or SOLVE): works it out, follows the player, draws it on the ground. |
+| | `tools_held.lua` | Which puzzle tools the player has; `update` (on each inventory change) notes a tool used on its barrier. |
 | | `highlights.lua` | The 3D boxes, the beam over the route's target and the route drawn on the ground. |
 | | `model_bounds.lua` | Turns the saved model boxes into each placed feature's box. |
 | | `dialogue_text.lua` | Reads the info box and the NPC dialogue box, for follow messages and refusals. |
 | | `draw_distance.lua` | Raises the draw distance on entering, and restores the player's setting. |
 | | `game_ids.lua` | Turns the game's config names into ids at load. |
 | | `world_number.lua` | Reads the world number from the friends list's title. |
-| `src/ui` | `map_window.lua` | The map window: zones, markers, routes, header, legends, NAVIGATE and SOLVE. |
+| `src/ui` | `map_window.lua` | The map window: zones, markers, the chosen and final routes, header, legends, buttons. |
 | | `scout_window.lua` | The scout window: node kinds found, counts, monsters left. |
 | | `full_forest_alert.lua` | The green flash and the click block on a 9/9 forest. |
 | | `sharing_button.lua` | The map title bar's sharing-mode button. |
@@ -65,13 +66,14 @@ plugin load (main.lua)
         │   restore the draw distance once the grid is in use                       │
         └───────────────────────────────────────────────────────────────────────────┘
               │ callbacks (wired in main.lua)
-              ├─ onEntered  → open the scout window / map (or the map hidden, for guidance)
-              ├─ onChanged  → ScoutWindow.showForest, MapWindow.showForest, Highlights.refresh, FullForestAlert.check;
-              │               starts NAVIGATE once the search ends, if set to
-              ├─ onMoved    → MapWindow.showPlayer (marker, route follows), Highlights.followPlayer
-              ├─ onInventoryChanged → MapWindow.showInventory, Highlights.followPlayer
-              ├─ onNpcMoved → MapWindow.showNpcMoved
-              └─ onLeft     → close windows not open before entering, clear highlights, forget plans and tools
+              ├─ onEntered  → open the scout window / map
+              ├─ onChanged  → ScoutWindow.showForest, RouteChoice.showForest, MapWindow.showForest, Highlights.refresh,
+              │               FullForestAlert.check; starts NAVIGATE once the search ends, if set to
+              ├─ onMoved    → RouteChoice.showPlayer (route follows), MapWindow.showPlayer, Highlights.followPlayer
+              ├─ onInventoryChanged → RouteChoice.showInventory, MapWindow.showInventory, Highlights.followPlayer
+              ├─ onNpcMoved → RouteChoice.showNpcMoved, MapWindow.showNpcMoved
+              └─ onLeft     → close windows not open before entering, clear highlights, forget the route, plans and
+                              tools
 ```
 
 Leaving: `WorldCreated` (or a new region) calls `stopWatching`, which unsubscribes the forest's events, restores the
@@ -146,7 +148,7 @@ them.
 | Field | Where it comes from | What it holds | Used by |
 |---|---|---|---|
 | `isInside`, `isSearching` | `enter`; the settling count | Whether a forest was recognised, and whether more may still be found. | Windows (the "Still looking" state), NAVIGATE's start. |
-| `zones` | `readRegion`: `World.GetRegionSourceForCoordGrid` for every zone of the region's map squares | `{ x, z, sourceX, sourceZ }`: each zone's south-west tile and the template zone it copies. | The grid, the map's zone pictures. |
+| `zones` | `readRegion`: `World.GetRegionSourceForCoordGrid` for every zone of the region's map squares | `{ x, z, sourceX, sourceZ, templateKey }`: each zone's south-west tile, the template zone it copies and that zone's key in the template data. | The grid, the map's zone pictures. |
 | `bounds` | `readRegion` | `{ minX, minZ, width, length }` in tiles. | The grid, the map's scale, `followPlayer`. |
 | `openings` | `readRegion`: zones copied from the opening template (4200, 664) | The mouth tile of the entrance and the exit. | The final route, the entrance signs, routes to an opening. |
 | `standingByZone` | `StandingHeights.read`, retried as zones load | `"x,z"` → 64 heights. | `ForestGrid.build`, to turn each zone. |
@@ -220,8 +222,8 @@ key stop a door needs, or nil when the key is held.
 **Plans** (`solve_plan.lua`): `SolvePlan.nextStop(grid, player, stops, alwaysBlocked)` finds the first stop of the
 shortest tour through every reachable stop, respecting doors (a door can only be crossed after its key) and leaving
 out stops that cannot be reached (each costs more than any tour). It searches once from the player and once from
-each stop, then runs a dynamic program over the sets of stops visited. The map window caches each plan by its inputs
-(`parts.plans`) and keeps the current target while the player follows its route.
+each stop, then runs a dynamic program over the sets of stops visited. `RouteChoice` caches each plan by its inputs
+and keeps the current target while the player follows its route.
 
 **Routes** (`routes.lua`) are breadth-first searches over the walkable tiles: four straight steps plus diagonals
 between two open sides, with barrier tiles blocked. A target is reached from the tiles beside it (`tilesRound`).
@@ -230,12 +232,20 @@ Routes are returned as their corner tiles.
 - `finalRoute`: the tree of ways from the entrance to every node and to the exit, from one search, drawn in white.
 - `routeTowardCentre`: when every needed door's key is still unseen, the route walks toward the forest's centre.
 
+### The route chosen (`route_choice.lua`)
+One route is chosen at a time, map open or not: `RouteChoice.shown` (the key of the feature, puzzle or sign clicked),
+`mapping` (NAVIGATE down) or `solving` (SOLVE down). `update` works the route out (`chosenRoute`): a plan's next stop
+for NAVIGATE or SOLVE, or a route to the thing clicked; a target behind a door becomes a small plan toward it. It
+keeps the result in `RouteChoice.drawn` (`{ tiles, colour, target, stops, keysUnseen, ahead, trimmedX, trimmedZ }`)
+and calls `Highlights.beamOn` and `Highlights.showRoute`. It runs again when the forest, the choice or the tools held
+change; on each step `showPlayer` cuts the route back to the player's nearest point on it (`ahead`), and straying
+more than three tiles works it out again. A plan drops its choice once it has nothing left, and a feature chosen with
+work left (`waitsFor`) drops once that is done.
+
 ### The map window (`map_window.lua`)
 The open window's state is the local table `parts`: the PrettyUI window, every component created with its last
-written state, the frame's layout, and the route state. The route state is:
-- `routeShown` (the key of the feature, puzzle or sign clicked), `mapping` (NAVIGATE down) or `solving` (SOLVE down);
-- `routeDrawn` (`{ tiles, colour, target, stops, ahead, trimmedAt }`);
-- `plans`, and `routeWaitsFor` (the feature whose work ending clears the choice).
+written state and the frame's layout. It draws the route from `RouteChoice.drawn`, and a click (a marker, a sign, a
+legend row, NAVIGATE or SOLVE) goes to `RouteChoice.choose`. Closing it leaves the route chosen running.
 
 Values needed several times in one redraw (the view, the tools held, the puzzles shown) are worked out once and kept
 in `redraw`, which is reset at each way in. `view()` turns the settings into what to show, and sharing mode overrides
@@ -244,13 +254,11 @@ most of them.
 Flow:
 1. `MapWindow.open` builds the frame (`build`) and lays it out (`layout`) for the window's size.
 2. `showForest` (each `onChanged`) places the zone pictures (`placeZones`), the markers (`placeMarkers`), the signs
-   and the legends' counts, then `drawRoutes`.
-3. `drawRoutes` works out the chosen route (`chosenRoute`): a plan's next stop for NAVIGATE or SOLVE, or a route to
-   the thing clicked. A target behind a door becomes a small plan toward it. With nothing chosen it draws the final
-   route instead, worked out once per entry on the server tick after the search ends. It then calls
-   `Highlights.beamOn` and `Highlights.showRoute`.
-4. `showPlayer` (each step) moves the player marker, and `followRoute` redraws the route from the player's nearest
-   point on it. Straying more than three tiles works the route out again.
+   and the legends' counts, then `paintRoutes`.
+3. `paintRoutes` draws the chosen route from the player on, or with nothing chosen the final route, worked out once
+   per entry on the server tick after the search ends. `showRoute` adds the legend's pressed buttons and outlines and
+   the icons shown only as the route's stops.
+4. `showPlayer` (each step) moves the player marker and draws the route again.
 5. Window resizes go through an override of the window's `SetSize`, which lays the frame out for the new size.
 
 Every component property is written only when its value changes (`setBox`, `setHidden`, `showLabel`). On close
@@ -294,7 +302,7 @@ when every kind is present (or, by a setting, every kind still unclaimed today).
 | `Logic` (50/s) | During the 5 s alert | The flash. |
 | `Draw` (per frame) | While the first ground route builds | 12 tiles a frame. |
 | `Draw` (per frame) | During a map resize drag | Fits the window on release. |
-| `Draw` (per frame) | For one frame after a sharing button click | Raises the button. |
+| `Draw` (per frame) | For one frame after a click on the map's title bar | Raises the sharing button. |
 | `Draw` (per frame) | For one frame after the alert's unblock button is clicked | Removes the button. |
 | `Draw` (per frame) | For two frames after each resize step of the settings window | Sets the sliders again, so their thumbs match their values (until PrettyUI 1.4.0). |
 | `KeyDown` | While the keybind is bound | The keybind. |

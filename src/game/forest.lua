@@ -31,14 +31,15 @@ local SHOWN_SETTLED_AFTER = 4
 Forest.isInside = false
 Forest.isSearching = false -- more may still be found
 Forest.bounds = nil     -- { minX, minZ, width, length } in tiles; nil outside a forest
-Forest.zones = {}       -- [n] = { x, z, sourceX, sourceZ }: south-west tiles of a zone and of the zone it copies
+Forest.zones = {}       -- [n] = { x, z, sourceX, sourceZ, templateKey }: south-west tiles of a zone and of the zone
+                        -- it copies, and that zone's key in the template data ("x_z")
 Forest.grid = nil       -- the forest's walkable tiles (src/game/forest_grid.lua), once its zones' turns are settled
 Forest.zoneTurns = nil  -- zone index -> quarter turns, as last worked out, settled or not: for the map's pictures
 Forest.openings = {}    -- [n] = { x, z }: the mouth of each opening (entrance, exit)
 Forest.standingByZone = {}  -- "x,z" of a zone -> what stands on its tiles (src/game/standing_heights.lua);
                             -- shows which way the zone was turned
-Forest.found = {}       -- [n] = { feature, x, z, width, length, isUsed }: centre in tiles, size, and for a node
-                        -- whether it was used today; drawn in this order
+Forest.found = {}       -- [n] = an entry (locationEntry, noteNpc), and for a node isUsed: whether it was used
+                        -- today; drawn in this order
 Forest.countOf = {}     -- feature key -> how many were found
 Forest.doorsGone = {}   -- barrier key -> true once a found barrier is gone (its puzzle is done)
 Forest.monstersSpawned = 0 -- hostile monsters spawned in this forest, each entity counted once
@@ -101,8 +102,8 @@ for _, task in ipairs(ForestFeatures.trinksTasks) do list(task, "task", 3) end
 for _, node in ipairs(ForestFeatures.nodes) do list(node, "node", 4) end
 
 -- What the forest has shown so far. Features stay known out of sight; only a change at their tile removes them.
-local locationsFound = {} -- packed coordinate -> { feature, x, z }, scanned or announced
-local npcsFound = {}      -- [n] = { feature, x, z }: where each one's marker is
+local locationsFound = {} -- packed coordinate -> entry (locationEntry), scanned or announced
+local npcsFound = {}      -- [n] = entry (noteNpc), at its marker
 local monstersSeen = {}   -- entity uid -> true, so a monster back in view is not a new spawn
 local foundChanged = false
 -- The grid's inputs (the zones' standing heights) changed since it was built.
@@ -130,7 +131,7 @@ function Forest.readClaimedToday()
     return count
 end
 
--- Each task's current-quest value  from the game's enum.
+-- Each task's current-quest value from the game's enum.
 local questOf = {}
 for _, task in ipairs(ForestFeatures.trinksTasks) do
     -- an unknown struct's name reads as nil
@@ -161,14 +162,13 @@ for _, task in ipairs(ForestFeatures.trinksTasks) do
 end
 
 -- Items in the backpack and worn equipment: item id -> true.
--- Inside the forest updated whenever the inventory changes, 
--- Outside the forest only when the current Trinks tasks needs it and the ribbon window is open.
+-- Inside the forest they are kept until the inventory changes; outside it they are read on each call.
 local HELD_INVENTORY_IDS = { config.Inv.INV.id, GameIds.resolve("Inv", "WORN") }
 local isHeldInventory = {}
 for _, inventoryID in ipairs(HELD_INVENTORY_IDS) do isHeldInventory[inventoryID] = true end
 local itemsHeldNow = nil
 function Forest.itemsHeld()
-    if itemsHeldNow ~= nil and Forest.isInside then return itemsHeldNow end
+    if itemsHeldNow ~= nil then return itemsHeldNow end
     local items = {}
     for _, inventoryID in ipairs(HELD_INVENTORY_IDS) do
         for _, slot in ipairs(Inventory.Find(inventoryID):GetSlots()) do
@@ -282,9 +282,20 @@ local function playerListed(holder)
     return false
 end
 
-local listenToPlayers -- defined below
+local function onPlayerRemoved()
+    playersRemoved = true
+end
 
--- Frees the keys whose holders are no longer listed
+-- Listens for players leaving while a key is taken.
+local function listenToPlayers()
+    if next(Forest.keysTaken) ~= nil then
+        Event.PlayerEntityRemoved.Subscribe(PLAYERS_SUBSCRIPTION, onPlayerRemoved)
+    else
+        Event.PlayerEntityRemoved.Unsubscribe(PLAYERS_SUBSCRIPTION)
+    end
+end
+
+-- Frees the keys whose holders are no longer listed.
 -- Not a direct callback as players may only leave the list one tick after the event.
 local function freeKeysOfPlayersGone()
     if not playersRemoved then return end
@@ -298,30 +309,14 @@ local function freeKeysOfPlayersGone()
     listenToPlayers()
 end
 
-local function onPlayerRemoved()
-    playersRemoved = true
-end
-
--- Listens for players leaving while a key is taken.
-listenToPlayers = function()
-    if next(Forest.keysTaken) ~= nil then
-        Event.PlayerEntityRemoved.Subscribe(PLAYERS_SUBSCRIPTION, onPlayerRemoved)
-    else
-        Event.PlayerEntityRemoved.Unsubscribe(PLAYERS_SUBSCRIPTION)
-    end
-end
-
-local function noteFollowing(sourceKey)
-    Forest.following[sourceKey] = true
-    Forest.keysTaken[sourceKey] = nil
-    listenToPlayers()
-    foundChanged = true
-end
-
--- Notes a follower when texts indicate it is following the player or refuses due to following another player.
-local function noteFollowTexts(shownTexts)
+-- Reads the info box and the dialogue box, while an NPC tool is not following yet, for a follow message or a refusal
+-- as it follows another player.
+local function readDialogue()
+    local allFollowing = true
+    for _, sourceKey in pairs(followMessages) do allFollowing = allFollowing and Forest.following[sourceKey] end
+    if allFollowing then return end
     local texts = {}
-    for index, text in ipairs(shownTexts) do texts[index] = (text:gsub("<br>", " "):gsub("\194\160", " ")) end
+    for index, text in ipairs(DialogueText.open()) do texts[index] = (text:gsub("<br>", " "):gsub("\194\160", " ")) end
     local refused = {} -- source key -> the name of the player its NPC follows
     for _, text in ipairs(texts) do
         for pattern, sourceKey in pairs(refusals) do
@@ -338,15 +333,12 @@ local function noteFollowTexts(shownTexts)
     end
     for _, text in ipairs(texts) do
         for message, sourceKey in pairs(followMessages) do
-            if not Forest.following[sourceKey] and text:find(message, 1, true) then noteFollowing(sourceKey) end
+            if not Forest.following[sourceKey] and text:find(message, 1, true) then
+                Forest.following[sourceKey], Forest.keysTaken[sourceKey] = true, nil
+                listenToPlayers()
+                foundChanged = true
+            end
         end
-    end
-end
-
--- Reads the info box and the dialogue box for follow messages
-local function readDialogue()
-    for _, sourceKey in pairs(followMessages) do
-        if not Forest.following[sourceKey] then return noteFollowTexts(DialogueText.open()) end
     end
 end
 
@@ -361,7 +353,6 @@ local anyAnnounced = false -- a feature was announced, so the locations are not 
 local announcedInBurst = false -- a feature was announced in the first burst
 local announcedThisTick = false
 local announcementsEnded = false
-local searchEnded = false -- the search has shown as done once this entry; it does not come back
 local announcingTicksLeft = 0 -- server ticks to wait for the burst; set only on a region's creation
 
 -- Counts a hostile monster: an attackable NPC that is neither a familiar nor one of the forest's own NPCs (the
@@ -372,7 +363,7 @@ local function noteMonster(npcEntity)
     if monstersSeen[npcEntity.uid] then return end
     monstersSeen[npcEntity.uid] = true
     Forest.monstersSpawned = Forest.monstersSpawned + 1
-    if Forest.onMonstersChanged then Forest.onMonstersChanged() end
+    Forest.onMonstersChanged()
 end
 
 local function noteNpc(npcEntity)
@@ -410,7 +401,7 @@ local function readStanding()
     local anyRead = false
     for _, zone in ipairs(Forest.zones) do
         local zoneKey = zone.x .. "," .. zone.z
-        if Forest.standingByZone[zoneKey] == nil and ForestGrid.hasStanding(zone.sourceX .. "_" .. zone.sourceZ) then
+        if Forest.standingByZone[zoneKey] == nil and ForestGrid.hasStanding(zone.templateKey) then
             Forest.standingByZone[zoneKey] = StandingHeights.read(level, zone.x, zone.z)
             anyRead = anyRead or Forest.standingByZone[zoneKey] ~= nil
         end
@@ -424,7 +415,7 @@ local function scanNpcs()
 end
 
 -- With the plugin reloaded inside a forest, the server's announcement has passed, so only scans find its nodes, keys
--- and doors. On a fresh entry the announcement gives everything the scans would, so the locations are scanned only 
+-- and doors. On a fresh entry the announcement gives everything the scans would, so the locations are scanned only
 -- if the events are missed.
 local announcementMissed = false
 
@@ -457,42 +448,18 @@ local function scan()
     foundChanged = foundChanged or changedBefore
 end
 
-local function locationEntries()
-    local entries = {}
-    for _, entry in pairs(locationsFound) do entries[#entries + 1] = entry end
-    return entries
-end
-
--- Builds the forest's grid, keeping the last one built if the new one would be the same, so routes and plan
--- searches cached on it stay valid. Returns whether it changed.
--- The server tick puts it in Forest.grid once it is settled (every zone whose turn matters turned by its heights) or
--- GRID_WAIT_TICKS have passed since entering, so the map's zones, the routes and the plans are not worked out on
--- the unturned zones of the first ticks, while the zones load.
+-- The grid is rebuilt when its inputs change, keeping the last one built if the new one would be the same, so routes
+-- and plan searches cached on it stay valid. The server tick puts it in Forest.grid once it is settled (every zone
+-- whose turn matters turned by its heights) or GRID_WAIT_TICKS have passed since entering, so the map's zones, the
+-- routes and the plans are not worked out on the unturned zones of the first ticks, while the zones load.
 local GRID_WAIT_TICKS = 6 -- about four seconds; at High draw distance (raised on entering) the zones load in 3 ticks
 local builtGrid = nil -- the last grid built, held back from Forest.grid until settled or due
--- With the plugin reloaded inside a forest, only the scans find its nodes, keys and doors, so the draw distance
--- stays up until they settle as well as the grid, as the client lets far squares go below Medium.
-local restoreAfterScans = false
 local gridDueTick = 0 -- the server tick from which an unsettled grid is used
-local function buildGrid()
-    gridStale = false
-    local grid = ForestGrid.build(Forest.zones, Forest.bounds, Forest.standingByZone, builtGrid)
-    if grid == builtGrid then return false end
-    builtGrid, Forest.zoneTurns = grid, grid.turns
-    return true
-end
-
--- Puts the player's draw distance back once the grid is in use, and after a reload once the scans settle too.
-local function restoreDrawDistanceWhenDone()
-    if Forest.grid ~= nil and (not restoreAfterScans or settlingTicksLeft == 0) then
-        restoreAfterScans = false
-        DrawDistance.restore()
-    end
-end
 
 local function publish()
     foundChanged = false
-    local found, countOf = locationEntries(), {}
+    local found, countOf = {}, {}
+    for _, entry in pairs(locationsFound) do found[#found + 1] = entry end
     for _, entry in ipairs(npcsFound) do found[#found + 1] = entry end
     -- Nodes over tools; within a layer, southern over northern.
     table.sort(found, function(first, second)
@@ -512,7 +479,7 @@ local function publish()
         end
     end
     Forest.found, Forest.countOf = found, countOf
-    if Forest.onChanged then Forest.onChanged() end
+    Forest.onChanged()
 end
 
 -- Returns the region's copied zones, their bounds and its openings, or nil until the region can be read.
@@ -532,7 +499,8 @@ local function readRegion()
                 zoneX % ZONES_PER_MAP_SQUARE * ZONE_SIZE, zoneZ % ZONES_PER_MAP_SQUARE * ZONE_SIZE))
             if source ~= nil and source.level >= 0 then
                 local x, z = zoneX * ZONE_SIZE, zoneZ * ZONE_SIZE
-                zones[#zones + 1] = { x = x, z = z, sourceX = source.x, sourceZ = source.z }
+                zones[#zones + 1] = { x = x, z = z, sourceX = source.x, sourceZ = source.z,
+                templateKey = source.x .. "_" .. source.z }
                 minX, maxX = math.min(minX or x, x), math.max(maxX or x, x)
                 minZ, maxZ = math.min(minZ or z, z), math.max(maxZ or z, z)
             end
@@ -580,7 +548,7 @@ local function followPlayer()
     if last == nil or last.x // ZONE_SIZE ~= x // ZONE_SIZE or last.z // ZONE_SIZE ~= z // ZONE_SIZE then
         if readStanding() then gridStale = true end
     end
-    if Forest.onMoved then Forest.onMoved() end
+    Forest.onMoved()
 end
 
 -- Drops everything of a forest on leaving, as the instance is gone once all players leave. The grid goes with the
@@ -590,11 +558,11 @@ local function forgetForest()
     Forest.found, Forest.countOf, Forest.doorsGone, Forest.following = {}, {}, {}, {}
     Forest.keysTaken, playersRemoved = {}, false
     Forest.standingByZone = {}
-    Forest.grid, builtGrid, Forest.zoneTurns = nil, nil, nil -- built by the publish after the first scan on entering
+    Forest.grid, builtGrid, Forest.zoneTurns = nil, nil, nil
     Forest.playerTile, Forest.entryTile = nil, nil
     Forest.monstersSpawned = 0
     npcsFound, monstersSeen, taskItemsHeld, itemsHeldNow = {}, {}, {}, nil
-    npcsArrived, searchEnded = false, false
+    npcsArrived = false
 end
 
 local function stopWatching()
@@ -611,7 +579,7 @@ local function stopWatching()
     if Forest.isInside then
         Forest.isInside, Forest.isSearching = false, false
         forgetForest()
-        if Forest.onLeft then Forest.onLeft() end
+        Forest.onLeft()
         ForestGrid.forgetTemplates()
     end
 end
@@ -625,7 +593,7 @@ local function dropAt(packedCoord, shapeType)
     end
 end
 
--- Notes a feature added, another location added replaces one of the same shape on its tile.
+-- Notes a feature added. Another location added replaces one of the same shape on its tile.
 local function onLocationAdded(event)
     local config, coord = event.config, event.coordGrid
     local packedCoord = coord:ToPacked()
@@ -653,7 +621,7 @@ local function onLocationRemoved(event)
 end
 
 local function enter(region)
-    Forest.isInside = true
+    Forest.isInside, Forest.isSearching = true, true
     gridDueTick = Forest.ticks + GRID_WAIT_TICKS
     Forest.zones, Forest.bounds, Forest.openings = region.zones, region.bounds, region.openings
     foundChanged, gridStale, settlingTicksLeft = true, true, SETTLING_TICKS
@@ -663,7 +631,7 @@ local function enter(region)
     Event.InventoryUpdated.Subscribe(SUBSCRIPTION, function(event)
         if not isHeldInventory[event.inv.id] then return end
         itemsHeldNow = nil
-        if Forest.playerTile ~= nil and Forest.onInventoryChanged then Forest.onInventoryChanged() end
+        if Forest.playerTile ~= nil then Forest.onInventoryChanged() end
         -- a task's item gained or lost: publish next tick, for the legend and highlights
         for task in pairs(doneItemOf) do
             local holds = holdsDoneItem(task)
@@ -691,7 +659,7 @@ local function enter(region)
         announcedInBurst, announcedThisTick, announcementsEnded = false, false, false
         announcingTicksLeft = ANNOUNCING_TICKS
     end
-    if Forest.onEntered then Forest.onEntered() end
+    Forest.onEntered()
 end
 
 -- Moves each found NPC's marker to its tile once a server tick, so its route ends at it.
@@ -705,7 +673,7 @@ local function followNpcs()
             local x, z = coord.x + 0.5, coord.z + 0.5
             if entry.x ~= x or entry.z ~= z then
                 entry.x, entry.z = x, z
-                if Forest.onNpcMoved then Forest.onNpcMoved(entry) end
+                Forest.onNpcMoved(entry)
             end
         end
     end
@@ -743,30 +711,35 @@ local function onServerTick()
         scanNpcs()
     end
     npcsArrived = false
-    local wasSearching = Forest.isSearching
-    Forest.isSearching = not announcementsEnded and not searchEnded
-        and settlingTicksLeft > SETTLING_TICKS - SHOWN_SETTLED_AFTER
-    -- the search ending is a change too: the windows show whether it is still going
-    if wasSearching and not Forest.isSearching then foundChanged, searchEnded = true, true end
+    -- the search ending is a change too, as the windows show whether it is still going; it does not come back
+    if Forest.isSearching and (announcementsEnded or settlingTicksLeft <= SETTLING_TICKS - SHOWN_SETTLED_AFTER) then
+        Forest.isSearching, foundChanged = false, true
+    end
     readDialogue()
     freeKeysOfPlayersGone()
     followNpcs()
     -- heights read by a scan or a step may change the grid without a find
-    if gridStale and buildGrid() then foundChanged = true end
+    if gridStale then
+        gridStale = false
+        local grid = ForestGrid.build(Forest.zones, Forest.bounds, Forest.standingByZone, builtGrid)
+        if grid ~= builtGrid then builtGrid, Forest.zoneTurns, foundChanged = grid, grid.turns, true end
+    end
     -- an unsettled grid is held back until gridDueTick
     if builtGrid ~= nil and Forest.grid ~= builtGrid and (builtGrid.settled or Forest.ticks >= gridDueTick) then
         Forest.grid, foundChanged = builtGrid, true
     end
     if foundChanged then publish() end
     followPlayer()
-    restoreDrawDistanceWhenDone()
+    -- After a reload only the scans find the nodes, keys and doors, so the draw distance stays up until they settle
+    -- too, as the client lets far squares go below Medium.
+    if Forest.grid ~= nil and (not announcementMissed or settlingTicksLeft == 0) then DrawDistance.restore() end
 end
 
--- Listens for added locations from the region's creation
+-- Listens for added locations from the region's creation.
 -- isNew is false when the plugin loaded inside the forest, after its announcement.
 local function watchRegion(isNew)
     arrivalTicksLeft = ARRIVAL_TICKS
-    restoreAfterScans, announcementMissed = not isNew, not isNew
+    announcementMissed = not isNew
     announcedInBurst, announcedThisTick, announcementsEnded = false, false, false
     announcingTicksLeft = isNew and ANNOUNCING_TICKS or 0
     Event.ServerLogic.Subscribe(SUBSCRIPTION, onServerTick)

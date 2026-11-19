@@ -18,7 +18,7 @@ local FLASH_COLOUR = 0x2ECC4070 -- green, partly see-through
 -- A fully transparent rectangle may take no clicks, and one this faint shows nothing.
 local BLOCKER_COLOUR = 0x00000001
 
-FullForestAlert.onBlocked = nil   -- called when the blocker goes up (main.lua raises the scout window over it)
+FullForestAlert.onBlocked = nil   -- called when the blocker goes up (main.lua reopens the scout window over it)
 FullForestAlert.onUnblocked = nil -- called when it comes down
 
 local alerted = false -- this forest entry's alert has been given
@@ -61,7 +61,7 @@ function FullForestAlert.stop()
     if blocker ~= nil then
         blocker:Destroy()
         blocker = nil
-        if FullForestAlert.onUnblocked then FullForestAlert.onUnblocked() end
+        FullForestAlert.onUnblocked()
     end
 end
 
@@ -72,7 +72,7 @@ local function onLogicTick()
     if flash ~= nil and ticks % flashTicks == 0 then flash.hidden = ticks // flashTicks % 2 == 1 end
 end
 
--- Returns whether the forest should trigger the alert
+-- Returns whether the forest should trigger the alert.
 function FullForestAlert.forestIsComplete(kinds, missedKinds)
     if kinds >= #ForestFeatures.nodes then return true end
     -- which nodes the forest has is known only once the search settles
@@ -89,7 +89,7 @@ end
 
 -- Called when what was found changes. Alerts the first time this forest entry is complete.
 function FullForestAlert.check()
-    if alerted or not Forest.isInside then return end
+    if alerted then return end
     if not (Settings.flashOnFullForest or Settings.blockOnFullForest) then return end
     local kinds, _, _, missedKinds = Forest.scoutCounts()
     if not FullForestAlert.forestIsComplete(kinds, missedKinds) then return end
@@ -98,17 +98,16 @@ function FullForestAlert.check()
     local pluginLayer = ui.Interfaces:GetComponent(id.Component.TOPLEVEL_V2__PLUGIN_BUILD_LAYER_TOP)
     if Settings.blockOnFullForest then
         blocker = fullScreen(pluginLayer, BLOCKER_COLOUR, true)
-        if FullForestAlert.onBlocked then FullForestAlert.onBlocked() end
+        FullForestAlert.onBlocked()
     end
     if Settings.flashOnFullForest then
         flash = fullScreen(pluginLayer, FLASH_COLOUR, false)
     end
 end
 
--- Re-arms the alert on entering a forest.
+-- Re-arms the alert on entering a forest. Leaving the last one stopped its alert.
 function FullForestAlert.reset()
     alerted = false
-    FullForestAlert.stop()
 end
 
 return FullForestAlert

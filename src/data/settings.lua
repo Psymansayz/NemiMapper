@@ -59,13 +59,11 @@ Settings.numbers = {
     -- 0 is opaque, 100 invisible. At 44 the box sides have the fill the boxes were designed around (0x8F).
     highlightTransparency = { default = 44, min = 0, max = 100 },
 }
--- Each window's top-left corner and size.
-local PLACES = {
-    "mapX", "mapY", "mapWidth", "mapHeight", "scoutX", "scoutY", "scoutWidth", "scoutHeight",
-    "settingsX", "settingsY", "settingsWidth", "settingsHeight",
-    "nodeLegendX", "nodeLegendY", "nodeLegendWidth", "nodeLegendHeight", "puzzleLegendX", "puzzleLegendY",
-    "puzzleLegendWidth", "puzzleLegendHeight",
-}
+-- Each window's top-left corner and size, as WindowPlace names them.
+local PLACES = {}
+for _, window in ipairs({ "map", "scout", "settings", "nodeLegend", "puzzleLegend" }) do
+    for _, part in ipairs({ "X", "Y", "Width", "Height" }) do PLACES[#PLACES + 1] = window .. part end
+end
 
 -- Resets all settings to their defaults. Window placements are kept.
 function Settings.reset()

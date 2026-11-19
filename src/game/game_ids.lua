@@ -3,14 +3,10 @@
 
 local GameIds = {}
 
-GameIds.unresolved = {} -- "<kind>.<name>" for every name the game did not know, once each
-local noted = {}
+GameIds.unresolved = {} -- "<kind>.<name>" -> true for every name the game did not know
 
 function GameIds.noteUnknown(kind, name)
-    local key = kind .. "." .. name
-    if noted[key] then return end
-    noted[key] = true
-    GameIds.unresolved[#GameIds.unresolved + 1] = key
+    GameIds.unresolved[kind .. "." .. name] = true
 end
 
 -- Returns the named player variable (a VarType, read via .value).

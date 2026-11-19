@@ -14,16 +14,12 @@ local infoLayerID = GameIds.resolve("Component", "TOPLEVEL_V2__INFOBOX_TOP_LAYER
 
 local texts -- the list DialogueText.open is filling
 
+-- Notes a component's text, if it is a label showing. Returns false, so a search through the info box goes on.
 local function noteLabel(component)
     if component.type == ui.ComponentType.LABEL and component.visibleGlobal then
         local content = component.content
         if content ~= nil and content ~= "" then texts[#texts + 1] = content end
     end
-end
-
--- Notes a dynamic child's text, if it is a label showing.
-local function noteDynamicLabel(child)
-    noteLabel(child)
     return false
 end
 
@@ -31,7 +27,7 @@ end
 function DialogueText.open()
     texts = {}
     local infoLayer = infoLayerID ~= nil and ui.Interfaces:GetComponent(infoLayerID) or nil
-    if infoLayer ~= nil then infoLayer:IterateDynamicComponents(noteDynamicLabel) end
+    if infoLayer ~= nil then infoLayer:IterateDynamicComponents(noteLabel) end
     for _, labelID in ipairs(dialogueLabelIDs) do
         local component = ui.Interfaces:GetComponent(labelID)
         if component ~= nil then noteLabel(component) end

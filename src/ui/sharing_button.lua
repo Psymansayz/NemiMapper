@@ -1,4 +1,4 @@
--- The button on the map window's title bar that turns map sharing mode on and off
+-- The button on the map window's title bar that turns map sharing mode on and off.
 
 local GameIds = require("src/game/game_ids")
 local Settings = require("src/data/settings")
@@ -45,7 +45,6 @@ function SharingButton.add(window, pluginLayer, isShown, onToggle)
     place()
     if window.resize ~= nil then
         local setEnabled = window.resize.SetEnabled
-        button.setEnabled = setEnabled -- put back on destroy
         window.resize.SetEnabled = function(resize, enabled)
             setEnabled(resize, enabled)
             if not enabled then
@@ -67,14 +66,9 @@ function SharingButton:show()
     end
 end
 
-function SharingButton:hide()
-    self.sprite.hidden = true
-end
-
+-- Destroys the button, just before its window is destroyed, so the window's SetEnabled hook is left in place.
 function SharingButton:destroy()
     if raised == self then raise() end
-    local resize = self.window.resize
-    if self.setEnabled ~= nil and resize ~= nil then resize.SetEnabled = self.setEnabled end
     self.window:_UnregisterOverlay(self.sprite)
     self.sprite:Destroy()
 end

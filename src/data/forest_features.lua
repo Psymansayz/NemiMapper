@@ -151,6 +151,13 @@ ForestFeatures.trinksDailyTasks = {
     { name = "Pahtli Plant", parts = {} },                                                 -- its fruit, in the forest
 }
 
+-- The trail signs at the forest's openings, each on its side's edge pointing out of the forest, and the colour of the
+-- route to one (the signs' painted letters). A click routes to the sign's opening, as a click on a feature does.
+ForestFeatures.entranceSigns = {
+    { key = "sign_otot", side = "north", colour = 0xF7E1A0FF },
+    { key = "sign_kanatah", side = "east", colour = 0xF7E1A0FF },
+}
+
 -- A feature's colour, for its routes, rows and boxes: a node's skill's, a puzzle's pair's, or Trinks' tasks'.
 local TASK_COLOUR = 0xF2E05AFF -- yellow: the burning log's puzzle has the orange
 function ForestFeatures.colourOf(feature)

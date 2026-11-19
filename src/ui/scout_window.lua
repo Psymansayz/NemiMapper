@@ -4,7 +4,6 @@
 
 local ForestFeatures = require("src/data/forest_features")
 local Forest = require("src/game/forest")
-local GameIds = require("src/game/game_ids")
 local Settings = require("src/data/settings")
 local WindowPlace = require("src/ui/window_place")
 local FullForestAlert = require("src/ui/full_forest_alert")
@@ -30,10 +29,10 @@ local INCOMPLETE_COLOUR = Colours.GOLD
 local NODE_COLOUR = 0xFFFFFFFF
 local ABSENT_COLOUR = 0xFFFFFF4D -- dimmed like the map's legend (0.3)
 local MISSING_COLOUR = Colours.RED | 0x99 -- dimmed
-local COUNT_FONT = GameIds.resolve("Font", "MUSEO_SANS_27PT_BOLD") or id.Font.MUSEO_SANS_13PT_BOLD
+local COUNT_FONT = id.Font.MUSEO_SANS_27PT_BOLD
 -- A text has only one font, so "monsters left" is two texts on one line: a larger bold number, right-aligned in the
 -- width of the highest possible count, then the words.
-local MONSTER_NUMBER_FONT = GameIds.resolve("Font", "MUSEO_SANS_19PT_BOLD") or id.Font.MUSEO_SANS_13PT_BOLD
+local MONSTER_NUMBER_FONT = id.Font.MUSEO_SANS_19PT_BOLD
 local MONSTER_WORDS = "monsters left"
 local MONSTER_GAP = 5 -- pixels between the number and its words
 local COUNT_HEIGHT = 32 -- about the font's height, leaving no room under it
@@ -46,11 +45,6 @@ local parts = nil
 local function isOpen()
     if parts ~= nil and ui.Interfaces:GetInterface(parts.window.interfaceID) == nil then parts = nil end
     return parts ~= nil
-end
-
--- Returns the width of the highest possible monster count, in its font.
-local function monsterNumberWidth()
-    return config.Font.FromID(MONSTER_NUMBER_FONT):GetStringWidth(tostring(ForestFeatures.monstersAtMost)) + 4
 end
 
 -- Shows how many monsters are still to spawn.
@@ -125,18 +119,19 @@ end
 function ScoutWindow.open(PrettyUI, pluginLayer, onOpenMap)
     if isOpen() then return parts.window:Show() end
     local isBlocking = FullForestAlert.isBlocking()
-    local numberWidth = monsterNumberWidth()
+    -- the highest possible monster count in its font, and the words after it
+    local numberWidth = config.Font.FromID(MONSTER_NUMBER_FONT):GetStringWidth(tostring(ForestFeatures.monstersAtMost))
+        + 4
     local wordsWidth = config.Font.FromID(TEXT_FONT):GetStringWidth(MONSTER_WORDS) + 4
     local minimumWidth = widthNeeded(PrettyUI, numberWidth, wordsWidth, isBlocking)
-    local width = math.min(math.max(minimumWidth, Settings.scoutWidth or WIDTH), pluginLayer.width)
-    local height = math.min(Settings.scoutHeight or HEIGHT, pluginLayer.height)
-    local x, y = WindowPlace.position(pluginLayer, width, height, Settings.scoutX, Settings.scoutY)
+    local x, y, width, height = WindowPlace.restore(pluginLayer, "scout", WIDTH, HEIGHT, minimumWidth)
     local window = PrettyUI.Window.new(pluginLayer, {
         title = "Nemi scout", x = x, y = y, width = width, height = height, destroyOnClose = true,
         resizable = true, minWidth = minimumWidth, minHeight = MINIMUM_HEIGHT,
         onClose = release, -- closing with the X destroys the window itself
     })
-    parts = { window = window, minimumWidthUnblocked = widthNeeded(PrettyUI, numberWidth, wordsWidth, false) }
+    parts = { window = window }
+    if isBlocking then parts.minimumWidthUnblocked = widthNeeded(PrettyUI, numberWidth, wordsWidth, false) end
     local line = StatusText.new
     parts.countText = line(window:AddTitle({ text = "", font = COUNT_FONT, height = COUNT_HEIGHT, marginBottom = 0 }))
     -- PrettyUI lays controls out in the order they are added, so the button can only be at the top if added here.
@@ -171,7 +166,7 @@ ScoutWindow.showSettings = ScoutWindow.showForest
 
 -- Called when a monster spawns, which changes nothing else shown.
 function ScoutWindow.showMonsters()
-    if isOpen() and Forest.bounds ~= nil then showMonsters() end
+    if isOpen() then showMonsters() end
 end
 
 -- Destroys the unblock button a frame after its click hid it, as a component can't be destroyed in its own click.
@@ -183,8 +178,7 @@ local function removeUnblockButton()
     parts.unblockButton = nil
     -- PrettyUI's resize handle keeps its own copy of the limits.
     local window, minimumWidth = parts.window, parts.minimumWidthUnblocked
-    window.minWidth = minimumWidth
-    if window.resize ~= nil then window.resize.minWidth = minimumWidth end
+    window.minWidth, window.resize.minWidth = minimumWidth, minimumWidth
     window:SetSize(window.root.width, window.root.height - BUTTON_ROW)
 end
 
