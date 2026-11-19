@@ -102,7 +102,6 @@ function FullForestAlert.check()
     end
     if Settings.flashOnFullForest then
         flash = fullScreen(pluginLayer, FLASH_COLOUR, false)
-        flash:MoveToFront()
     end
 end
 

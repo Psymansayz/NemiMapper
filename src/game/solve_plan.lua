@@ -6,7 +6,6 @@ local SolvePlan = {}
 
 local INFINITE = math.huge
 local MISSED = 1000000 -- a stop no order reaches costs more than any tour's tiles
-local NONE = {}
 
 -- Returns tiles as a set of grid indexes.
 local function tilesOf(grid, tiles)
@@ -18,11 +17,11 @@ local function tilesOf(grid, tiles)
     return indexes
 end
 
--- Returns the distances from a search's start to each stop, avoiding the blocked tiles.
-local function distancesFrom(grid, found, stops, blocked)
+-- Returns the distances from a search's start to each stop.
+local function distancesFrom(grid, found, stops)
     local distances = {}
     for index, stop in ipairs(stops) do
-        local _, distance = Routes.nearest(found, Routes.tilesRound(grid, stop, blocked))
+        local _, distance = Routes.nearest(found, Routes.tilesRound(grid, stop))
         distances[index] = distance and distance + 1 or INFINITE -- and the step onto the stop
     end
     return distances
@@ -52,14 +51,17 @@ local function distancesFromStop(grid, stop, stops, doorsKey, blockedFor)
         allKnown = allKnown and distances[index] ~= nil
     end
     if allKnown then return distances end
-    local blocked = blockedFor(stop)
-    distances = distancesFrom(grid, Routes.search(grid, stop.tiles, blocked, true), stops, blocked)
+    distances = distancesFrom(grid, Routes.search(grid, stop.tiles, blockedFor(stop), true), stops)
     for index, target in ipairs(stops) do known[stopKey(target)] = distances[index] end
     return distances
 end
 
--- Returns the stop to go to first; stops as SolvePlan.nextStop takes them.
-local function plan(grid, player, stops, alwaysBlocked)
+-- stops: [n] = { kind = "key" or "door", x, z (the feature's tile), tiles (every tile it stands on), needs = the
+-- key stop a door needs, or nil when the key is held }.
+-- player: { x, z }. alwaysBlocked: tile index -> true for tiles never to cross (barriers that are not stops).
+-- Returns the stop to go to first, and the search from the player with every barrier shut (Routes.search with
+-- parents), for the route to that stop.
+function SolvePlan.nextStop(grid, player, stops, alwaysBlocked)
     local stopCount = #stops
     if stopCount == 0 then return nil end
     local indexOf = {}
@@ -88,7 +90,7 @@ local function plan(grid, player, stops, alwaysBlocked)
     table.sort(shutIndexes)
     local doorsKey = table.concat(shutIndexes, " ")
     local playerSearch = Routes.search(grid, { player }, allShut)
-    local base = { [0] = distancesFrom(grid, playerSearch, stops, allShut) }
+    local base = { [0] = distancesFrom(grid, playerSearch, stops) }
     for index, stop in ipairs(stops) do base[index] = distancesFromStop(grid, stop, stops, doorsKey, blockedBut) end
     -- Distances with the doors visited so far open
     local joinedByMask = {}
@@ -119,11 +121,11 @@ local function plan(grid, player, stops, alwaysBlocked)
     end
     local allVisited = 0
     for index in ipairs(stops) do allVisited = allVisited | (1 << index) end
-    -- The cheapest way to visit the rest from a stop, cached by the stop and the stops visited, and the tour's
-    -- first stop.
+    -- The cheapest way to visit the rest from a stop, cached by the stop and the stops visited, and the stop to go
+    -- to next.
     -- A stop left unvisited costs MISSED, so a tour takes every stop some order can reach before it counts tiles.
     -- The rest, out of reach or behind a door whose key is behind that door, are left out.
-    local remembered, firstStop = {}, nil
+    local remembered = {}
     local function cheapest(at, visitedMask)
         if visitedMask == allVisited then return 0 end
         local key = at * (allVisited + 1) + visitedMask
@@ -149,11 +151,11 @@ local function plan(grid, player, stops, alwaysBlocked)
             end
         end
         remembered[key] = best
-        if key == 0 then firstStop = bestFirst end
-        return best
+        return best, bestFirst
     end
-    cheapest(0, 0)
-    return firstStop and stops[firstStop], playerSearch
+    -- the first call is never remembered, so it gives the stop to go to first
+    local _, first = cheapest(0, 0)
+    return first and stops[first], playerSearch
 end
 
 -- Returns the stops a tour of the mustVisit stops needs.
@@ -199,15 +201,6 @@ function SolvePlan.neededStops(grid, player, stops, mustVisit, keylessDoors)
         return kept
     end
     return neededAmong(stops), neededAmong(keylessDoors)
-end
-
--- stops: [n] = { kind = "key" or "door", x, z (the feature's tile), tiles (every tile it stands on), needs = the
--- key stop a door needs, or nil when the key is held }.
--- player: { x, z }. blocked: tile index -> true for tiles never to cross (barriers that are not stops), or nil.
--- Returns the stop to go to first, and the search from the player with every barrier shut (Routes.search with
--- parents), for the route to that stop.
-function SolvePlan.nextStop(grid, player, stops, blocked)
-    return plan(grid, player, stops, blocked or NONE)
 end
 
 return SolvePlan

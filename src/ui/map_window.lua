@@ -385,7 +385,6 @@ end
 -- leaves. It is only for sharing, so it waits for the next server tick rather than share a frame with NAVIGATE's
 -- plan, and is skipped while a route is chosen.
 local finalRouteOf = nil -- { entry, routes } for the last forest entered, keyed by its entry tile
-local finalRouteWaiting = false -- waiting for a server tick to work it out
 local waitForFinalRoute -- defined below drawRoutes, which it calls
 local function workOutFinalRoute()
     local grid, entry = Forest.grid, Forest.entryTile
@@ -424,8 +423,7 @@ end
 -- Worked out once per redraw.
 local function toolsHeld()
     if redraw.held == nil then
-        local player = Forest.isInside and Forest.playerTile or nil
-        redraw.held = player and ToolsHeld.sourceKeys() or {}
+        redraw.held = Forest.playerTile and ToolsHeld.sourceKeys() or {}
     end
     return redraw.held
 end
@@ -514,7 +512,7 @@ local function chosenRoute(player, keep)
         local target = stop.entry.isNpc and ForestStops.stopOf(stop.kind, stop.entry, stop.colour) or stop
         local route
         if playerSearch ~= nil then
-            route = Routes.routeFrom(playerSearch, Forest.grid, { target }, blocked)
+            route = Routes.routeFrom(playerSearch, Forest.grid, { target })
         else
             route = Routes.routeTo(Forest.grid, player, { target }, blocked)
         end
@@ -692,7 +690,7 @@ local function drawRoutes(afresh)
         dropRouteChoice()
         showLegendStates()
     end
-    local player = Forest.isInside and Forest.playerTile or nil
+    local player = Forest.playerTile
     local route, colour, target, stops, keysUnseen = nil, nil, nil, nil, nil
     if Forest.grid ~= nil and player ~= nil and routeChosen() then
         local keep = not afresh and parts.routeDrawn and parts.routeDrawn.target or nil
@@ -722,13 +720,10 @@ end
 -- and nothing chosen in its place.
 local FINAL_ROUTE_SUBSCRIPTION = "nemi_mapper_final_route"
 local function stopWaitingForFinalRoute()
-    if not finalRouteWaiting then return end
-    finalRouteWaiting = false
     Event.ServerLogic.Unsubscribe(FINAL_ROUTE_SUBSCRIPTION)
 end
+-- Subscribing again while waiting replaces the same subscription.
 waitForFinalRoute = function()
-    if finalRouteWaiting then return end
-    finalRouteWaiting = true
     Event.ServerLogic.Subscribe(FINAL_ROUTE_SUBSCRIPTION, function()
         stopWaitingForFinalRoute()
         if not isLaidOut() then return end
@@ -795,20 +790,6 @@ local function canChooseRoute()
     return Forest.isInside and not Settings.mapSharingMode
 end
 
--- Makes a map sprite larger when hovered.
-local function growOnHover(sprite, placed)
-    sprite:Subscribe(ui.Hook.ONMOUSEOVER, function()
-        if not canChooseRoute() then return true end
-        local width, height = placed.width * HOVER_SCALE, placed.height * HOVER_SCALE
-        setBox(sprite, placed.x + (placed.width - width) / 2, placed.y + (placed.height - height) / 2, width, height)
-        return true
-    end)
-    sprite:Subscribe(ui.Hook.ONMOUSELEAVE, function()
-        setBox(sprite, placed.x, placed.y, placed.width, placed.height)
-        return true
-    end)
-end
-
 -- Chooses a legend row's, map icon's or entrance sign's route, or drops it on a second click.
 local function toggleRoute(key)
     if not canChooseRoute() then return end
@@ -822,7 +803,16 @@ local function makeRoutable(sprite, placed, keyOf)
         toggleRoute(keyOf())
         return true
     end)
-    growOnHover(sprite, placed)
+    sprite:Subscribe(ui.Hook.ONMOUSEOVER, function()
+        if not canChooseRoute() then return true end
+        local width, height = placed.width * HOVER_SCALE, placed.height * HOVER_SCALE
+        setBox(sprite, placed.x + (placed.width - width) / 2, placed.y + (placed.height - height) / 2, width, height)
+        return true
+    end)
+    sprite:Subscribe(ui.Hook.ONMOUSELEAVE, function()
+        setBox(sprite, placed.x, placed.y, placed.width, placed.height)
+        return true
+    end)
 end
 
 -- Places one sprite per found feature shown, kept and reused in drawing order.
@@ -887,7 +877,7 @@ placeSigns = function()
 end
 
 local function showPlayer()
-    local position = Forest.isInside and view().playerDot and Forest.playerTile or nil
+    local position = view().playerDot and Forest.playerTile or nil
     setHidden(parts.playerMarker, position == nil)
     if position == nil then return end
     local size = math.max(5, PLAYER_SIZE * parts.frame.iconScale)
@@ -1067,15 +1057,11 @@ end
 local PUZZLE_WINDOW_LEAST_WIDTH = EDGE + MINIMUM_MAP_SIZE
     + clampedLegendWidth(MINIMUM_MAP_SIZE * LEGEND_TO_MAP, LEGEND_MINIMUM_WIDTH) + WINDOW_EDGE_WIDTH
 
-local simpleLegendMinimumWidth = nil
+-- A simplified legend is as wide as its NAVIGATE button, inside the legend's border.
 local function legendMinimumWidthFor(shows)
     if not shows.simpleLegends then return LEGEND_MINIMUM_WIDTH end
-    if simpleLegendMinimumWidth == nil then
-        local buttonWidth = PATHS_ICON_SPRITE ~= nil and MAP_ROUTE_HEIGHT
-            or config.Font.FromID(TEXT_FONT):GetStringWidth("NAVIGATE") + 16
-        simpleLegendMinimumWidth = buttonWidth + 2 -- inside the legend's border
-    end
-    return simpleLegendMinimumWidth
+    return PATHS_ICON_SPRITE ~= nil and MAP_ROUTE_HEIGHT + 2
+        or config.Font.FromID(TEXT_FONT):GetStringWidth("NAVIGATE") + 18
 end
 
 -- Returns whether the node legend shows a feature's row
@@ -1467,7 +1453,7 @@ local function poppedBox(host)
 end
 
 local function layoutPopped(host)
-    if parts == nil or parts.frame == nil then return end
+    if parts.frame == nil then return end
     local box = poppedBox(host)
     if host == parts.nodeHost then
         layoutNodeLegend(box)
@@ -1512,8 +1498,8 @@ local function layout(contentWidth, contentHeight, isResize)
         setMinimumSize(parts.window, minimumWidth, minimumHeight)
         local windowWidth, windowHeight = contentWidth + WINDOW_EDGE_WIDTH, contentHeight + WINDOW_EDGE_HEIGHT
         if windowWidth < minimumWidth or windowHeight < minimumHeight then
-            parts.layoutAfresh = not isResize
-            return parts.window:SetSize(math.max(windowWidth, minimumWidth), math.max(windowHeight, minimumHeight))
+            return parts.window:SetSize(math.max(windowWidth, minimumWidth), math.max(windowHeight, minimumHeight),
+                isResize == true)
         end
     end
     parts.contentWidth, parts.contentHeight = contentWidth, contentHeight
@@ -1584,7 +1570,7 @@ local function layout(contentWidth, contentHeight, isResize)
         local leastWidth = poppedNodeLegendWidth(leastHeight - WINDOW_EDGE_HEIGHT, shows) + WINDOW_EDGE_WIDTH
         setMinimumSize(window, leastWidth, leastHeight)
         local height = window.root.height
-        if parts.nodeRowHeight ~= nil and parts.nodeRowCount ~= nil and rowsNow ~= parts.nodeRowCount then
+        if parts.nodeRowHeight ~= nil and rowsNow ~= parts.nodeRowCount then
             height = math.floor(fixedHeight + parts.nodeRowHeight * rowsNow + 0.5)
         end
         height = math.max(height, leastHeight)
@@ -1605,17 +1591,21 @@ local function layout(contentWidth, contentHeight, isResize)
         end
     end
     -- The node legend beside the map, from the frame's top to the map's foot, and the puzzle legend under both.
-    local nodeBox = nodePopped and poppedBox(parts.nodeHost) or { left = frame.mapLeft + mapSize + EDGE,
-        top = frame.top + EDGE, width = legendWidth, height = headerHeight + mapSize - EDGE }
-    layoutNodeLegend(nodeBox)
-    local puzzleBox = puzzlePopped and poppedBox(parts.puzzleHost) or { left = frame.mapLeft,
-        top = frame.mapTop + mapSize + EDGE, width = frame.width - EDGE * 2, height = puzzleLegendTall }
-    layoutPuzzleLegend(puzzleBox)
+    if nodePopped then
+        layoutPopped(parts.nodeHost)
+    else
+        layoutNodeLegend({ left = frame.mapLeft + mapSize + EDGE, top = frame.top + EDGE, width = legendWidth,
+            height = headerHeight + mapSize - EDGE })
+    end
+    if puzzlePopped then
+        layoutPopped(parts.puzzleHost)
+    else
+        layoutPuzzleLegend({ left = frame.mapLeft, top = frame.mapTop + mapSize + EDGE, width = frame.width - EDGE * 2,
+            height = puzzleLegendTall })
+    end
     setBox(parts.overlay, 0, 0, contentWidth, contentHeight)
     drawChrome()
     drawOverlay()
-    if nodePopped then drawPopped(parts.nodeHost, nodeBox, drawNodeOverlay) end
-    if puzzlePopped then drawPopped(parts.puzzleHost, puzzleBox, drawPuzzleOverlay) end
     showPoppedWindows()
     parts.zonesShown = nil -- place every zone again at the new size
     showFound(isResize)
@@ -1988,12 +1978,11 @@ function MapWindow.open(PrettyUI, pluginLayer, hidden)
     -- A window's content takes its new size a moment after a resize, so the layout uses the size passed to
     -- SetSize, which PrettyUI's resize handle calls on each step of a drag.
     local setWindowSize = window.SetSize
-    window.SetSize = function(resizedWindow, newWidth, newHeight)
+    -- asResize is false for layout's own growth to a new minimum; PrettyUI's resize handle passes nothing.
+    window.SetSize = function(resizedWindow, newWidth, newHeight, asResize)
         setWindowSize(resizedWindow, newWidth, newHeight)
-        local isResize = not parts.layoutAfresh
-        parts.layoutAfresh = nil
         layout(math.max(resizedWindow.minWidth, math.floor(newWidth)) - WINDOW_EDGE_WIDTH,
-            math.max(resizedWindow.minHeight, math.floor(newHeight)) - WINDOW_EDGE_HEIGHT, isResize)
+            math.max(resizedWindow.minHeight, math.floor(newHeight)) - WINDOW_EDGE_HEIGHT, asResize ~= false)
         if resizedWindow.resize ~= nil and resizedWindow.resize.dragState ~= nil then
             Event.Draw.Subscribe(RESIZE_END_SUBSCRIPTION, fitAfterResize)
         end

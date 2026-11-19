@@ -13,7 +13,7 @@ local raisedFrom = nil -- the player's own setting, while the plugin has raised 
 
 function DrawDistance.raise()
     local option = game.options.DrawDistance
-    if raisedFrom ~= nil or option.setting >= LOADS_EVERY_ZONE then return false end
+    if option.setting >= LOADS_EVERY_ZONE then return false end
     local playerSetting = option.setting
     if not option:Set(LOADS_EVERY_ZONE) then return false end
     raisedFrom = playerSetting

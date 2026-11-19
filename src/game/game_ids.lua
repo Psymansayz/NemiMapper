@@ -21,6 +21,12 @@ function GameIds.playerVariable(name)
     return variable
 end
 
+-- Returns the id of a player variable's base variable, which is what the server sends when it changes.
+-- The variables watched are all VarBits, so each has one.
+function GameIds.baseIDOf(variable)
+    return variable ~= nil and variable.baseVar.id or nil
+end
+
 -- Returns the id of a config's name.
 -- An unknown name reads as -1.
 function GameIds.resolve(kind, name)
