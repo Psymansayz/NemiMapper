@@ -55,22 +55,18 @@ local function openScout()
     openWindow(ScoutWindow.open, openMap)
 end
 
--- Called when the 9/9 alert blocks the game: opens the scout window with its unblock button.
+-- Called when the 9/9 alert blocks the game: opens the scout window, rebuilt with its unblock button.
 FullForestAlert.onBlocked = function()
+    ScoutWindow.close()
     openScout()
-    ScoutWindow.showBlocking(true)
 end
-FullForestAlert.onUnblocked = function() ScoutWindow.showBlocking(false) end
+FullForestAlert.onUnblocked = ScoutWindow.dropUnblockButton
 
--- The keybinds, unbound until the player binds them on the settings page. There is one, to open or close the map.
+-- The keybind to open or close the map: the GameKeys bound, in order, unbound until the player binds them on the
+-- settings page.
 local KEYBIND_SUBSCRIPTION = "nemi_mapper_keybinds"
 local keybindsListening = false
-local function toggleMap()
-    if MapWindow.isShown() then MapWindow.hideOrClose() else openMap() end
-end
-local keybinds = { -- by setting key: the GameKeys bound, in order, and what a press does
-    keybindOpenMap = { keys = {}, onPress = toggleMap },
-}
+local openMapKeys = {}
 local MODIFIER_BITS = { -- a modifier key's bit in a key event's modifiers
     [GameKey.SHIFT] = ModifierKey.SHIFT, [GameKey.CONTROL] = ModifierKey.CONTROL, [GameKey.ALT] = ModifierKey.ALT,
 }
@@ -90,9 +86,8 @@ end
 local function onKeyDown(event)
     if event.isRepeat or PrettyUI.KeybindField.IsCapturing() then return end
     if not Keyboard.IsAvailable() or Keyboard.IsBlocked() then return end
-    for _, keybind in pairs(keybinds) do
-        if completes(keybind.keys, event) then return keybind.onPress() end
-    end
+    if not completes(openMapKeys, event) then return end
+    if MapWindow.isShown() then MapWindow.hideOrClose() else openMap() end
 end
 
 local function setKeybindsListening(wanted)
@@ -105,24 +100,13 @@ local function setKeybindsListening(wanted)
     end
 end
 
--- Listens while any keybind is bound.
-local function listenForKeybinds()
-    local wanted = false
-    for _, keybind in pairs(keybinds) do wanted = wanted or #keybind.keys > 0 end
-    setKeybindsListening(wanted)
-end
-
-local function lookUpGameKey(name) return GameKey[name] end
-
--- Returns a saved binding's keys, in the format to save them.
+-- Returns a binding's keys from its saved text.
+-- A name the game no longer has reads as nil, and is left out.
 local function keybindKeysOf(text)
-    local keys, seen = {}, {}
+    local keys = {}
     for name in text:gmatch("%S+") do
-        local found, key = pcall(lookUpGameKey, name)
-        if found and type(key) == "number" and key >= 0 and not seen[key] and #keys < 2 then
-            seen[key] = true
-            keys[#keys + 1] = key
-        end
+        local key = GameKey[name]
+        if key ~= nil and key ~= keys[1] and #keys < 2 then keys[#keys + 1] = key end
     end
     return keys
 end
@@ -134,10 +118,10 @@ local function keybindTextOf(keys)
     return table.concat(names, " ")
 end
 
--- Sets the keybinds from the settings, when loaded or restored, and listens if any is bound.
+-- Sets the keybind from the settings, when loaded or restored, and listens if it is bound.
 local function applyKeybinds()
-    for setting, keybind in pairs(keybinds) do keybind.keys = keybindKeysOf(Settings[setting]) end
-    listenForKeybinds()
+    openMapKeys = keybindKeysOf(Settings.keybindOpenMap)
+    setKeybindsListening(#openMapKeys > 0)
 end
 
 local function loadSettings()
@@ -330,36 +314,28 @@ local settingRows = {
     { key = "keybindOpenMap", name = "Open or close the map", keybind = true },
 }
 
-local pageControls = {} -- setting key -> what shows it on whichever pages are built (see keepControl)
+-- Each row by its setting's key, and each row's depth under the top-level settings.
+local rowOf = {}
+for _, row in ipairs(settingRows) do
+    if row.key ~= nil then rowOf[row.key] = row end
+    row.depth = row.under ~= nil and rowOf[row.under].depth + 1 or 0
+end
+
+local controlsOf = {} -- page or window -> setting key -> what shows the setting there (see keepControl)
 
 -- Shows a setting's value on every page that has it, after a change elsewhere (another page, the map's sharing
 -- button or a restore).
 local function showSetting(key, source)
     forgetClosedSettingsWindow()
-    local controls = pageControls[key]
-    if controls == nil then return end
-    for _, kept in ipairs(controls) do
-        if kept.control ~= source then kept.show() end
+    for _, controls in pairs(controlsOf) do
+        local kept = controls[key]
+        if kept ~= nil and kept.control ~= source then kept.show() end
     end
-end
-
-local function rowOf(key)
-    for _, row in ipairs(settingRows) do
-        if row.key == key then return row end
-    end
-end
-
-local function depthOf(row)
-    local depth = 0
-    while row.under ~= nil do
-        depth, row = depth + 1, rowOf(row.under)
-    end
-    return depth
 end
 
 -- Returns the left edge of an indented sub-setting, or nil for a top-level one.
 local function indentOf(row)
-    return row.under ~= nil and PAGE_PADDING + depthOf(row) * INDENT or nil
+    return row.under ~= nil and PAGE_PADDING + row.depth * INDENT or nil
 end
 
 -- Returns whether a setting can be changed: every setting above it is on and its offWhen setting is off.
@@ -367,7 +343,7 @@ local function isEnabled(row)
     if row.offWhen ~= nil and Settings[row.offWhen] then return false end
     while row.under ~= nil do
         if not Settings[row.under] then return false end
-        row = rowOf(row.under)
+        row = rowOf[row.under]
     end
     return true
 end
@@ -379,14 +355,16 @@ end
 local function showEnabledStates()
     forgetClosedSettingsWindow()
     for _, other in ipairs(settingRows) do
-        local controls = pageControls[other.key]
-        if controls ~= nil and (other.under ~= nil or other.offWhen ~= nil) then
+        if other.under ~= nil or other.offWhen ~= nil then
             local disabled = not isEnabled(other)
-            for _, kept in ipairs(controls) do
-                kept.show()
-                if kept.disabled ~= disabled then
-                    kept.disabled = disabled
-                    kept.setDisabled(disabled)
+            for _, controls in pairs(controlsOf) do
+                local kept = controls[other.key]
+                if kept ~= nil then
+                    kept.show()
+                    if kept.disabled ~= disabled then
+                        kept.disabled = disabled
+                        kept.setDisabled(disabled)
+                    end
                 end
             end
         end
@@ -394,15 +372,9 @@ local function showEnabledStates()
 end
 
 local function keepControl(view, row, control, show, setDisabled)
-    local kept = {
-        page = view, control = control, show = show, setDisabled = setDisabled, disabled = not isEnabled(row),
-    }
-    local controls = pageControls[row.key]
-    if controls == nil then
-        controls = {}
-        pageControls[row.key] = controls
-    end
-    controls[#controls + 1] = kept
+    local kept = { control = control, show = show, setDisabled = setDisabled, disabled = not isEnabled(row) }
+    controlsOf[view] = controlsOf[view] or {}
+    controlsOf[view][row.key] = kept
     return kept
 end
 
@@ -413,7 +385,7 @@ local function changeSetting(row, value, source)
 end
 
 -- Called when map sharing mode is turned on or off from the map window's title bar: the pages follow.
-MapWindow.onSharingToggled = function() changeSetting(rowOf("mapSharingMode"), not Settings.mapSharingMode) end
+MapWindow.onSharingToggled = function() changeSetting(rowOf.mapSharingMode, not Settings.mapSharingMode) end
 
 local INFO_ICON_SIZE = 21 -- the game's info icon at its native size, which fits a checkbox row (22)
 
@@ -428,16 +400,9 @@ end
 local function addSlider(view, row)
     local number = Settings.numbers[row.key]
     local x = indentOf(row)
-    local function labelText() return row.name .. ": " .. Settings[row.key] .. "%" end
-    local labelShown = labelText()
-    local label = view:AddText({ text = labelShown, x = x, marginBottom = 0 })
-    local function showLabel()
-        local text = labelText()
-        if text ~= labelShown then
-            labelShown = text
-            label.content = text
-        end
-    end
+    local label = StatusText.new(view:AddText({ text = "", x = x, marginBottom = 0 }))
+    local function showLabel() StatusText.set(label, row.name .. ": " .. Settings[row.key] .. "%") end
+    showLabel()
     if row.info ~= nil then addInfoIcon(view, row.info) end
     local slider
     -- A slider is as wide as its row, so an indented one would overrun the right edge.
@@ -479,19 +444,18 @@ end
 
 local KEYBIND_LABEL_WIDTH, KEYBIND_FIELD_WIDTH = 220, 160
 local function addKeybindRow(view, row)
-    local keybind = keybinds[row.key]
     view:AddText({ text = row.name, width = KEYBIND_LABEL_WIDTH, marginBottom = ROW_GAP })
     if row.info ~= nil then addInfoIcon(view, row.info) end
     local field
     field = view:AddKeybindField({
-        value = keybind.keys, defaultValue = {}, inline = true, width = KEYBIND_FIELD_WIDTH, marginBottom = ROW_GAP,
+        value = openMapKeys, defaultValue = {}, inline = true, width = KEYBIND_FIELD_WIDTH, marginBottom = ROW_GAP,
         onChange = function(_, keys)
-            keybind.keys = keys
-            listenForKeybinds()
+            openMapKeys = keys
+            setKeybindsListening(#keys > 0)
             changeSetting(row, keybindTextOf(keys), field)
         end,
     })
-    keepControl(view, row, field, function() field:SetValue(keybind.keys, false) end)
+    keepControl(view, row, field, function() field:SetValue(openMapKeys, false) end)
 end
 
 -- Adds a setting's row: a checkbox, or the row's slider, text or keybind control.
@@ -523,12 +487,7 @@ end
 
 -- Forgets the controls of a page or window that is gone; other pages keep theirs.
 forgetControls = function(view)
-    for key, controls in pairs(pageControls) do
-        for index = #controls, 1, -1 do
-            if controls[index].page == view then table.remove(controls, index) end
-        end
-        if #controls == 0 then pageControls[key] = nil end
-    end
+    controlsOf[view] = nil
 end
 
 local function closeView(view)
@@ -703,10 +662,8 @@ local function layOutSliders()
     sliderLayoutFramesLeft = sliderLayoutFramesLeft - 1
     if sliderLayoutFramesLeft <= 0 then Event.Draw.Unsubscribe(SLIDER_LAYOUT_SUBSCRIPTION) end
     if not isSettingsWindowOpen() then return stopLayingOutSliders() end
-    for _, controls in pairs(pageControls) do
-        for _, kept in ipairs(controls) do
-            if kept.relayout ~= nil and kept.page == settingsWindow then kept.relayout() end
-        end
+    for _, kept in pairs(controlsOf[settingsWindow] or {}) do
+        if kept.relayout ~= nil then kept.relayout() end
     end
 end
 local function layOutSlidersSoon()
@@ -726,11 +683,10 @@ local function settingsWidthNeeded()
     local widest = 0
     for _, row in ipairs(settingRows) do
         if row.section == nil then
-            local left = PAGE_PADDING + depthOf(row) * INDENT
+            local left = PAGE_PADDING + row.depth * INDENT
             local width = row.slider and SLIDER_LEAST_WIDTH or row.text and TEXT_FIELD_WIDTH
-                or row.keybind and KEYBIND_LABEL_WIDTH + COLUMN_GAP + KEYBIND_FIELD_WIDTH
-                    + (row.info ~= nil and COLUMN_GAP + INFO_ICON_SIZE or 0)
-                or PrettyUI.CheckboxButton.getSize({ { text = row.name, value = row.key } })
+                or (row.keybind and KEYBIND_LABEL_WIDTH + COLUMN_GAP + KEYBIND_FIELD_WIDTH
+                    or PrettyUI.CheckboxButton.getSize({ { text = row.name, value = row.key } }))
                 + (row.info ~= nil and COLUMN_GAP + INFO_ICON_SIZE or 0)
             widest = math.max(widest, left + width)
         end
@@ -787,14 +743,19 @@ Event.SettingsLayerReady.Subscribe("nemi_mapper_settings", function(event)
     if not built then print(LOG_PREFIX .. "the settings page failed: " .. tostring(buildError)) end
 end)
 
+-- Stops what runs only in the game, on leaving it and at shutdown.
+local function stopInGame()
+    Forest.stop()
+    FullForestAlert.stop()
+    Highlights.clear()
+    setKeybindsListening(false)
+end
+
 Event.GameStateChanged.Subscribe("nemi_mapper_state", function(event)
     if event.newState == GameState.SWITCH_WORLD then WorldNumber.forget() end
     if event.newState == GameState.LOBBY or event.newState == GameState.LOGINSCREEN then
         WorldNumber.forget()
-        Forest.stop()
-        FullForestAlert.stop()
-        Highlights.clear()
-        setKeybindsListening(false)
+        stopInGame()
         Settings.save()
     elseif event.newState == GameState.GAME
         and (event.oldState == GameState.LOBBY or event.oldState == GameState.LOGINSCREEN) then
@@ -806,12 +767,9 @@ end)
 function PluginShutdown()
     Event.ContentLayerReady.Unsubscribe("nemi_mapper_content")
     Event.SettingsLayerReady.Unsubscribe("nemi_mapper_settings")
-    Event.GameStateChanged.Unsubscribe("nemi_mapper_state")
-    setKeybindsListening(false)
     ForestProbe.stop()
-    Forest.stop()
-    FullForestAlert.stop()
-    Highlights.clear()
+    Event.GameStateChanged.Unsubscribe("nemi_mapper_state")
+    stopInGame()
     MapWindow.close()
     ScoutWindow.close()
     closeSettingsWindow()

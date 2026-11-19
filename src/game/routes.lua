@@ -4,8 +4,9 @@
 local Routes = {}
 
 -- The four orthogonal steps, then the diagonals, which are only allowed between two open sides.
-local STEPS = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
-local DIAGONAL_STEPS = { { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } }
+-- The order breaks ties between equally short ways.
+local STEPS = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } }
+local ORTHOGONAL_STEPS = 4 -- the first four
 local WIDER = 2 -- tiles: a target with no open tile beside it (a misread tile) is reached from this close
 
 -- Returns a tile's steps, as a flat list of triples: the walkable tile stepped to and the two side tiles a diagonal
@@ -13,27 +14,15 @@ local WIDER = 2 -- tiles: a target with no open tile beside it (a misread tile) 
 -- They are cached on the grid on first use, as a grid's walkable tiles never change and working out steps in every
 -- search would take most of its time.
 -- Unwalkable tiles have steps too, as a search may start on a target's own tiles.
-local function stepsFrom(grid, index)
-    local steps = grid.steps
-    if steps == nil then
-        steps = {}
-        grid.steps = steps
-    end
-    local list = steps[index]
-    if list ~= nil then return list end
+local function stepsFrom(grid, steps, index)
     local x, z = grid:tile(index)
-    list = {}
-    for _, step in ipairs(STEPS) do
+    local list = {}
+    for position, step in ipairs(STEPS) do
         local nextIndex = grid:index(x + step[1], z + step[2])
-        if nextIndex ~= nil and grid.walkable[nextIndex] then
-            list[#list + 1], list[#list + 2], list[#list + 3] = nextIndex, 0, 0
-        end
-    end
-    for _, step in ipairs(DIAGONAL_STEPS) do
-        local nextIndex = grid:index(x + step[1], z + step[2])
-        local sideX, sideZ = grid:index(x + step[1], z), grid:index(x, z + step[2])
-        if nextIndex ~= nil and grid.walkable[nextIndex] and sideX ~= nil and grid.walkable[sideX]
-            and sideZ ~= nil and grid.walkable[sideZ] then
+        local sideX, sideZ = 0, 0
+        if position > ORTHOGONAL_STEPS then sideX, sideZ = grid:index(x + step[1], z), grid:index(x, z + step[2]) end
+        if nextIndex ~= nil and grid.walkable[nextIndex]
+            and (sideX == 0 or (grid.walkable[sideX or 0] and grid.walkable[sideZ or 0])) then
             list[#list + 1], list[#list + 2], list[#list + 3] = nextIndex, sideX, sideZ
         end
     end
@@ -56,16 +45,13 @@ local function search(grid, startTiles, blocked, distancesOnly)
             queue[#queue + 1] = index
         end
     end
-    local stepsByTile = grid.steps or NONE
+    local steps = grid.steps or {}
+    grid.steps = steps
     local first, last = 1, #queue
     while first <= last do
         local index = queue[first]
         first = first + 1
-        local list, nextDistance = stepsByTile[index], distance[index] + 1
-        if list == nil then
-            list = stepsFrom(grid, index)
-            stepsByTile = grid.steps
-        end
+        local list, nextDistance = steps[index] or stepsFrom(grid, steps, index), distance[index] + 1
         for position = 1, #list, 3 do
             local nextIndex, sideA = list[position], list[position + 1]
             if not blocked[nextIndex] and (sideA == 0 or not (blocked[sideA] or blocked[list[position + 2]])) then
@@ -100,7 +86,8 @@ local function tilesRound(grid, target, blocked)
     for _, tile in ipairs(footprint) do onTarget[grid:index(tile.x, tile.z) or 0] = true end
     local tiles, added = {}, {}
     for _, tile in ipairs(footprint) do
-        for _, step in ipairs(STEPS) do
+        for position = 1, ORTHOGONAL_STEPS do
+            local step = STEPS[position]
             addTileRound(grid, tiles, added, onTarget, blocked, tile.x + step[1], tile.z + step[2])
         end
     end
@@ -195,11 +182,11 @@ Routes.search, Routes.tilesRound, Routes.nearest = search, tilesRound, nearest
 -- Returns the route from the start of <found> to the nearest of targetTiles,
 -- avoiding <blocked>
 function Routes.routeFrom(found, grid, targetTiles, blocked)
-    local best, bestDistance = nil, nil
+    local tiles = {}
     for _, target in ipairs(targetTiles) do
-        local tile, distance = nearest(found, tilesRound(grid, target, blocked))
-        if tile ~= nil and (bestDistance == nil or distance < bestDistance) then best, bestDistance = tile, distance end
+        for _, tile in ipairs(tilesRound(grid, target, blocked)) do tiles[#tiles + 1] = tile end
     end
+    local best, bestDistance = nearest(found, tiles)
     if best == nil then return nil end
     return straightPieces(wayBack(found, best.index)), bestDistance
 end

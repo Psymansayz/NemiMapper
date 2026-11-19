@@ -17,8 +17,6 @@ local FLASH_SECONDS = 1 -- on this long, then off this long
 local FLASH_COLOUR = 0x2ECC4070 -- green, partly see-through
 -- A fully transparent rectangle may take no clicks, and one this faint shows nothing.
 local BLOCKER_COLOUR = 0x00000001
--- TEMPORARY, lowered to make the alert easier to test: set back to 9 (every kind) when done.
-local KINDS_FOR_ALERT = 6
 
 FullForestAlert.onBlocked = nil   -- called when the blocker goes up (main.lua raises the scout window over it)
 FullForestAlert.onUnblocked = nil -- called when it comes down
@@ -48,44 +46,35 @@ local function fullScreen(pluginLayer, colour, takesClicks)
     return rectangle
 end
 
-local function stopListening()
-    if flash == nil and blocker == nil then Event.Logic.Unsubscribe(SUBSCRIPTION) end
-end
-
-local function removeFlash()
-    if flash == nil then return end
-    flash:Destroy()
-    flash = nil
-    stopListening()
-end
-
--- Gives the mouse back to the game, at the alert's end or through stop (the scout window's button, leaving).
-function FullForestAlert.unblock()
-    if blocker == nil then return end
-    blocker:Destroy()
-    blocker = nil
-    stopListening()
-    if FullForestAlert.onUnblocked then FullForestAlert.onUnblocked() end
-end
-
 function FullForestAlert.isBlocking()
     return blocker ~= nil
 end
 
+-- Removes anything shown and gives the mouse back to the game: at the alert's end, through the scout window's
+-- button, on leaving or when the plugin stops.
+function FullForestAlert.stop()
+    Event.Logic.Unsubscribe(SUBSCRIPTION)
+    if flash ~= nil then
+        flash:Destroy()
+        flash = nil
+    end
+    if blocker ~= nil then
+        blocker:Destroy()
+        blocker = nil
+        if FullForestAlert.onUnblocked then FullForestAlert.onUnblocked() end
+    end
+end
+
 local function onLogicTick()
     ticks = ticks + 1
-    if ticks >= ALERT_SECONDS * LOGIC_TICKS_A_SECOND then
-        removeFlash()
-        FullForestAlert.unblock()
-        return
-    end
+    if ticks >= ALERT_SECONDS * LOGIC_TICKS_A_SECOND then return FullForestAlert.stop() end
     local flashTicks = FLASH_SECONDS * LOGIC_TICKS_A_SECOND
     if flash ~= nil and ticks % flashTicks == 0 then flash.hidden = ticks // flashTicks % 2 == 1 end
 end
 
 -- Returns whether the forest should trigger the alert
 function FullForestAlert.forestIsComplete(kinds, missedKinds)
-    if kinds >= KINDS_FOR_ALERT then return true end
+    if kinds >= #ForestFeatures.nodes then return true end
     -- which nodes the forest has is known only once the search settles
     if not Settings.alertOnNeededNodes or Forest.isSearching then return false end
     local needed = 0
@@ -121,12 +110,6 @@ end
 function FullForestAlert.reset()
     alerted = false
     FullForestAlert.stop()
-end
-
--- Removes anything shown, on leaving or when the plugin stops.
-function FullForestAlert.stop()
-    removeFlash()
-    FullForestAlert.unblock()
 end
 
 return FullForestAlert
