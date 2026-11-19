@@ -24,6 +24,7 @@
 --              and zone_walkability.lua (tools/make_template_standing.py)
 -- Logged as they happen: EVENT| for region and world events; CHANGE| for each change to what the plugin found,
 -- with ticks since the region was created (ForestProbe.logChange); and WALK| (ForestProbe.noteStep).
+-- Each forest is also saved to the PersistentDB for the route tests (saveForest), logging SAVED| each time.
 -- ForestProbe.logInterfaceComponents() logs what the open interfaces hold that the map could use:
 --   UICOMPONENT| each static component whose name (id.Component) contains MINIMAP, COMPASS or WORLD, with its
 --                sprite if it has one
@@ -309,8 +310,12 @@ local function flushWalked()
     walked = {}
 end
 
+local saveForest
+
 -- Called from Forest.onMoved while in the forest.
+-- Zones' standing heights are read as the player walks, so the forest is saved again when more are known.
 function ForestProbe.noteStep()
+    saveForest()
     local tileText = tile(Forest.playerTile)
     if tileText == lastWalkedTile then return end
     lastWalkedTile = tileText
@@ -361,12 +366,53 @@ function ForestProbe.logForest()
     log("PROBE", "end")
 end
 
+-- Saves the forest for the route tests as the PersistentDB string "forest|<layout hash>", which
+-- tools/export_forests.py copies to tools/forests/.
+-- It is in the pasted log's line format, newest first: HEIGHT|end, each zone's standing heights as the plugin read
+-- them (0 for none), what was found, and the entry tile as WORLD's player.
+-- It is saved again under the same key whenever more is known, so the last save holds the most.
+local saved = { zones = nil, key = nil, known = nil }
+function saveForest() -- declared above ForestProbe.noteStep
+    if Forest.bounds == nil or Forest.entryTile == nil then return end
+    local standingCount = 0
+    for _, zone in ipairs(Forest.zones) do
+        if Forest.standingByZone[zone.x .. "," .. zone.z] ~= nil then standingCount = standingCount + 1 end
+    end
+    local known = #Forest.found .. "|" .. standingCount
+    if saved.zones == Forest.zones and saved.known == known then return end
+    if saved.zones ~= Forest.zones then
+        -- Instances reuse the same tiles, so a forest is told apart by its layout.
+        local hash = 0
+        for _, zone in ipairs(Forest.zones) do
+            for character in (zone.sourceX .. "." .. zone.sourceZ .. ";"):gmatch(".") do
+                hash = (hash * 31 + character:byte()) % 4294967296
+            end
+        end
+        saved.zones, saved.key = Forest.zones, string.format("forest|%08x", hash)
+    end
+    saved.known = known
+    local lines = { LOG_PREFIX .. "HEIGHT|end" }
+    for _, zone in ipairs(Forest.zones) do
+        local standing = Forest.standingByZone[zone.x .. "," .. zone.z]
+        lines[#lines + 1] = LOG_PREFIX .. "HEIGHT|" .. zone.x .. "," .. zone.z .. "|" .. zone.sourceX .. "."
+            .. zone.sourceZ .. "|0|" .. (standing and table.concat(standing, " ") or "0")
+    end
+    for _, entry in ipairs(Forest.found) do
+        lines[#lines + 1] = LOG_PREFIX .. "FOUND|" .. entry.feature.key .. "|" .. entry.x .. "," .. entry.z
+    end
+    lines[#lines + 1] = LOG_PREFIX .. "WORLD|player=0," .. Forest.entryTile.x .. "," .. Forest.entryTile.z
+        .. "|zones=" .. #Forest.zones .. "|standing=" .. standingCount .. "|found=" .. #Forest.found
+    PersistentDB:SetString(saved.key, table.concat(lines, "\n"))
+    log("SAVED", saved.key .. "|standing=" .. standingCount .. "|found=" .. #Forest.found)
+end
+
 -- Called when what the plugin found changes or its search ends.
 function ForestProbe.logChange()
     local kinds, total = Forest.nodeCounts()
     log("CHANGE", "tick=" .. (Forest.ticks - regionCreatedAt) .. "|found=" .. #Forest.found .. "|nodes=" .. kinds
         .. "/" .. total .. "|searching=" .. tostring(Forest.isSearching)
         .. "|missed=" .. #Forest.nodesMissedByRotation())
+    saveForest()
 end
 
 function ForestProbe.start()

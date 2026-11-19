@@ -219,7 +219,7 @@ key stop a door needs, or nil when the key is held.
 
 **Plans** (`solve_plan.lua`): `SolvePlan.nextStop(grid, player, stops, blocked)` finds the first stop of the shortest
 tour through every reachable stop, respecting doors (a door can only be crossed after its key) and leaving out stops
-that cannot be reached. It searches once from the player and once from each stop, then runs a dynamic program over
+that cannot be reached (each costs more than any tour). It searches once from the player and once from each stop, then runs a dynamic program over
 the sets of stops visited. The map window caches each plan by its inputs (`parts.plans`) and keeps the current target
 while the player follows its route.
 

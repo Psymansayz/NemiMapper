@@ -437,7 +437,11 @@ local function addTextRow(view, row)
     local field
     field = view:AddTextField({
         text = Settings[row.key], width = TEXT_FIELD_WIDTH, marginBottom = ROW_GAP, maxLength = TEXT_LONGEST,
-        onChange = function(_, _, text) changeSetting(row, text, field) end,
+        onChange = function(_, _, text)
+            local plain = Settings.withoutTags(text)
+            if plain ~= text then field:SetText(plain, false) end
+            changeSetting(row, plain, field)
+        end,
     })
     keepControl(view, row, field, function() field:SetText(Settings[row.key], false) end)
 end

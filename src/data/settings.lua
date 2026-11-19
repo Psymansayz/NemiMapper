@@ -80,6 +80,12 @@ local function savedInteger(settingKey)
     return savedValue ~= nil and savedValue >= 0 and savedValue or nil
 end
 
+-- Returns text without angle brackets.
+-- The game reads them as markup in a shown text, and a tag like <img=-1> crashes the client.
+function Settings.withoutTags(text)
+    return (text:gsub("[<>]", ""))
+end
+
 function Settings.load()
     for _, switch in ipairs(SWITCHES) do
         local saved = savedInteger(switch[1])
@@ -90,7 +96,9 @@ function Settings.load()
         Settings[key] = saved == nil and number.default or math.max(number.min, math.min(number.max, saved))
     end
     for _, key in ipairs(PLACES) do Settings[key] = savedInteger(key) end
-    for key, default in pairs(STRINGS) do Settings[key] = PersistentDB:GetString(key) or default end
+    for key, default in pairs(STRINGS) do
+        Settings[key] = Settings.withoutTags(PersistentDB:GetString(key) or default)
+    end
 end
 
 Settings.reset()
