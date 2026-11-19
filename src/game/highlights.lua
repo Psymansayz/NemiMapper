@@ -36,9 +36,7 @@ local beamTarget = nil -- the chosen route's target, or nil for no beam
 local routeStops = {} -- the chosen route's stops (entry -> true), boxed by their setting
 local NONE = {}
 -- "<kind>:<size key>" -> ShapeData, whose origin is the middle of the feature's south-west tile.
--- Emptied when the transparency changes, as every shape is then remade.
 local shapes = {}
-local shapesTransparency = nil
 
 local function colours(count, alpha)
     local list = {}
@@ -146,9 +144,6 @@ local function npcFacesShape(entry) return facesOf(floorAndRoof(entry)) end
 local NPC_SHAPE_MAKERS = { box = npcEdgesShape, faces = npcFacesShape, beam = beamShape }
 
 local function shapeFor(kind, entry, sizeKey)
-    if shapesTransparency ~= Settings.highlightTransparency then
-        shapes, shapesTransparency = {}, Settings.highlightTransparency
-    end
     local key = kind .. ":" .. sizeKey
     local shape = shapes[key]
     if shape == nil then
@@ -176,13 +171,8 @@ local function beamWanted(entry)
     return not Settings.hideTargetBeam and beamTarget == entry
 end
 
--- Returns whether a wanted highlight has a beam or box.
-local function isWanted(wantedHighlight, kind)
-    if kind == "beam" then return wantedHighlight.beam end
-    return wantedHighlight.box
-end
-
--- Returns what to highlight now, as [name] = { entry, colour, x, z, box, beam }.
+-- Returns what to highlight now, as [name] = { entry, colour, x, z, box, faces, beam }, each kind true when wanted.
+-- An NPC's box is drawn as edges (box) and faces.
 local function wanted(held)
     local wantedHighlights = {}
     if not Forest.isInside or Forest.playerTile == nil then return wantedHighlights end
@@ -199,33 +189,26 @@ local function wanted(held)
             -- an NPC moves, so its highlight is named by its kind alone
             local name = ENTITY_PREFIX .. feature.key .. (entry.isNpc and "" or ("_" .. left .. "_" .. bottom))
             wantedHighlights[name] = { entry = entry, colour = ForestFeatures.colourOf(feature), x = left, z = bottom,
-                box = box, beam = beam }
+                box = box, faces = box, beam = beam }
         end
     end
     return wantedHighlights
 end
 
--- Places a feature's entity: the box at its south-west tile, the beam at the box's middle.
-local function placeEntity(entity, kind, level, left, bottom, entry)
+-- Makes one entity of a feature's highlight: the box at its south-west tile (wantedHighlight.x, wantedHighlight.z),
+-- the beam at the box's middle.
+local function makeEntity(name, kind, wantedHighlight, level, sizeKey)
+    local entry, left, bottom = wantedHighlight.entry, wantedHighlight.x, wantedHighlight.z
+    local entity = ShapeList.CreateEntity(name .. "_" .. kind)
+    entity:SetShapeData(shapeFor(kind, entry, sizeKey))
     if kind == "beam" then
         local bounds = entry.bounds
         entity.coordFine = CoordFine.new(level, (left + 0.5) * FINE_UNITS_PER_TILE + (bounds.x + bounds.X) / 2,
             (bottom + 0.5) * FINE_UNITS_PER_TILE + (bounds.z + bounds.Z) / 2)
+        entity.rotationSpeed = BEAM_TURN_SPEED
     else
         entity.coordGrid = CoordGrid.new(level, left // 64, bottom // 64, left % 64, bottom % 64)
-    end
-end
-
--- Makes one entity of a feature's highlight, placed from its south-west tile (wantedHighlight.x, wantedHighlight.z).
-local function makeEntity(name, kind, wantedHighlight, level, sizeKey)
-    local entry = wantedHighlight.entry
-    local entity = ShapeList.CreateEntity(name .. "_" .. kind)
-    entity:SetShapeData(shapeFor(kind, entry, sizeKey))
-    placeEntity(entity, kind, level, wantedHighlight.x, wantedHighlight.z, entry)
-    if kind == "beam" then
-        entity.rotationSpeed = BEAM_TURN_SPEED
-    elseif ShapeEntityAlignType ~= nil then
-        entity.alignType = ShapeEntityAlignType.OBJECT
+        if ShapeEntityAlignType ~= nil then entity.alignType = ShapeEntityAlignType.OBJECT end
     end
     entity.heightOffset = HEIGHT_OFFSET
     entity.lineWidth = LINE_WIDTH
@@ -264,8 +247,8 @@ local function shapeInstance(instance, highlight, kind)
     styleInstance(instance, highlight.colour)
 end
 
--- One instance of an NPC's highlight, hidden until followTracked places it.
 local instancesMade = 0
+-- One instance of an NPC's highlight, hidden until followTracked places it.
 local function makeInstance(highlight, name, kind)
     instancesMade = instancesMade + 1
     local instance = ShapeList.CreateInstance(name .. "_" .. kind .. "_" .. instancesMade)
@@ -332,7 +315,7 @@ local function refreshEntities(name, wantedHighlight, level)
     end
     local entities = highlight.entities
     for kind, entity in pairs(entities) do
-        if not isWanted(wantedHighlight, kind) then
+        if not wantedHighlight[kind] then
             entity:Destroy()
             entities[kind] = nil
         end
@@ -346,7 +329,7 @@ local function refreshEntities(name, wantedHighlight, level)
         for kind, entity in pairs(entities) do entity:SetShapeData(shapeFor(kind, entry, sizeKey)) end
     end
     for kind in pairs(SHAPE_MAKERS) do
-        if entities[kind] == nil and isWanted(wantedHighlight, kind) then
+        if entities[kind] == nil and wantedHighlight[kind] then
             entities[kind] = makeEntity(name, kind, wantedHighlight, level, sizeKey)
         end
     end
@@ -373,7 +356,7 @@ local function refreshInstances(name, wantedHighlight)
         if instances.faces ~= nil then shapeInstance(instances.faces, highlight, "faces") end
     end
     for kind in pairs(NPC_SHAPE_MAKERS) do
-        local isWantedNow = isWanted(wantedHighlight, kind)
+        local isWantedNow = wantedHighlight[kind]
         if isWantedNow and instances[kind] == nil then
             instances[kind] = makeInstance(highlight, name, kind)
             -- the next tick places it
@@ -390,13 +373,6 @@ function Highlights.refresh(held)
     local wantedHighlights = wanted(held)
     for name, highlight in pairs(shown) do
         if wantedHighlights[name] == nil then destroyHighlight(name, highlight) end
-    end
-    for name, highlight in pairs(shown) do
-        local made = highlight.entities or highlight.instances
-        if made.beam ~= nil and not wantedHighlights[name].beam then
-            made.beam:Destroy()
-            made.beam = nil
-        end
     end
     local level = Forest.isInside and Player.GetEntity().coordGrid.level or 0
     for name, wantedHighlight in pairs(wantedHighlights) do
@@ -544,9 +520,9 @@ local function hasStep(tiles)
     return #tiles >= 2 or stepOntoTarget(tiles[1]) ~= nil
 end
 
+local routeOrigin = nil -- the tile the route entity sits on
 -- Every tile of a route given by its corner tiles, plus a step onto the target, as points from an origin tile;
 -- with upTo, only its first upTo points.
-local routeOrigin = nil -- the tile the route entity sits on
 local function routePoints(tiles, origin, upTo)
     upTo = upTo or math.huge
     local positions = { pointAt(origin, tiles[1].x, tiles[1].z) }
@@ -674,7 +650,7 @@ end
 function Highlights.clear()
     Highlights.showRoute(nil)
     for name, highlight in pairs(shown) do destroyHighlight(name, highlight) end
-    shapes, shapesTransparency, heldShown = {}, nil, {}
+    shapes, heldShown = {}, {}
 end
 
 return Highlights

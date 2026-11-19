@@ -5,6 +5,7 @@ local Routes = require("src/game/routes")
 local SolvePlan = {}
 
 local INFINITE = math.huge
+local NONE = {}
 
 -- Returns tiles as a set of grid indexes.
 local function tilesOf(grid, tiles)
@@ -21,7 +22,7 @@ local function distancesFrom(grid, found, stops, blocked)
     local distances = {}
     for index, stop in ipairs(stops) do
         local _, distance = Routes.nearest(found, Routes.tilesRound(grid, stop, blocked))
-        distances[index] = distance and distance + 1 or INFINITE
+        distances[index] = distance and distance + 1 or INFINITE -- and the step onto the stop
     end
     return distances
 end
@@ -38,21 +39,21 @@ local function distancesFromStop(grid, stop, stops, doorsKey, blockedFor)
         cache = { doorsKey = doorsKey, byStop = {} }
         grid.stopDistances = cache
     end
-    local known = cache.byStop[stopKey(stop)]
+    local key = stopKey(stop)
+    local known = cache.byStop[key]
     if known == nil then
         known = {}
-        cache.byStop[stopKey(stop)] = known
+        cache.byStop[key] = known
     end
-    local distances = {}
+    local distances, allKnown = {}, true
     for index, target in ipairs(stops) do
         distances[index] = known[stopKey(target)]
-        if distances[index] == nil then
-            local blocked = blockedFor(stop)
-            distances = distancesFrom(grid, Routes.search(grid, stop.tiles, blocked, true), stops, blocked)
-            for position, each in ipairs(stops) do known[stopKey(each)] = distances[position] end
-            return distances
-        end
+        allKnown = allKnown and distances[index] ~= nil
     end
+    if allKnown then return distances end
+    local blocked = blockedFor(stop)
+    distances = distancesFrom(grid, Routes.search(grid, stop.tiles, blocked, true), stops, blocked)
+    for index, target in ipairs(stops) do known[stopKey(target)] = distances[index] end
     return distances
 end
 
@@ -131,15 +132,12 @@ local function plan(grid, player, stops, alwaysBlocked, playerSearch)
     end
     if doableMask ~= allVisited then
         -- a barrier left out stays shut, so its tiles are blocked
-        local left, stillBlocked = {}, alwaysBlocked
+        local left, stillBlocked = {}, {}
+        for index in pairs(alwaysBlocked) do stillBlocked[index] = true end
         for _, stop in ipairs(stops) do
             if doable[stop] then
                 left[#left + 1] = stop
             elseif stop.kind == "door" then
-                if stillBlocked == alwaysBlocked then
-                    stillBlocked = {}
-                    for index in pairs(alwaysBlocked) do stillBlocked[index] = true end
-                end
                 for index in pairs(doorIndexes[stop]) do stillBlocked[index] = true end
             end
         end
@@ -195,13 +193,12 @@ end
 function SolvePlan.neededStops(grid, player, stops, mustVisit, keylessDoors)
     local found = Routes.search(grid, { player })
     local doorAt = {} -- tile index -> the barrier on it
-    for _, stop in ipairs(stops) do
-        if stop.kind == "door" then
-            for index in pairs(tilesOf(grid, stop.tiles)) do doorAt[index] = stop end
+    for _, list in ipairs({ stops, keylessDoors }) do
+        for _, stop in ipairs(list) do
+            if stop.kind == "door" then
+                for index in pairs(tilesOf(grid, stop.tiles)) do doorAt[index] = stop end
+            end
         end
-    end
-    for _, door in ipairs(keylessDoors) do
-        for index in pairs(tilesOf(grid, door.tiles)) do doorAt[index] = door end
     end
     local function doorsOnWayTo(stop)
         local tile = Routes.nearest(found, Routes.tilesRound(grid, stop))
@@ -224,15 +221,14 @@ function SolvePlan.neededStops(grid, player, stops, mustVisit, keylessDoors)
     for _, stop in ipairs(stops) do
         if mustVisit[stop] then need(stop) end
     end
-    local kept = {}
-    for _, stop in ipairs(stops) do
-        if needed[stop] then kept[#kept + 1] = stop end
+    local function neededAmong(list)
+        local kept = {}
+        for _, stop in ipairs(list) do
+            if needed[stop] then kept[#kept + 1] = stop end
+        end
+        return kept
     end
-    local keylessNeeded = {}
-    for _, door in ipairs(keylessDoors) do
-        if needed[door] then keylessNeeded[#keylessNeeded + 1] = door end
-    end
-    return kept, keylessNeeded
+    return neededAmong(stops), neededAmong(keylessDoors)
 end
 
 -- stops: [n] = { kind = "key" or "door", x, z (the feature's tile), tiles (every tile it stands on), needs = the
@@ -240,7 +236,6 @@ end
 -- player: { x, z }. blocked: tile index -> true for tiles never to cross (barriers that are not stops), or nil.
 -- Returns the stop to go to first, and the search from the player with every barrier shut (Routes.search with
 -- parents), for the route to that stop.
-local NONE = {}
 function SolvePlan.nextStop(grid, player, stops, blocked)
     return plan(grid, player, stops, blocked or NONE)
 end

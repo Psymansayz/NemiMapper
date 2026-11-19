@@ -102,45 +102,34 @@ end
 -- Returns the grid over the forest's bounds (minX, minZ, width, length in tiles) with every zone's tiles.
 -- standingByZone: "x,z" of a zone -> its 64 standing heights (src/game/standing_heights.lua).
 -- grid.settled is false while a zone whose turn matters has no heights to turn it by.
-function ForestGrid.build(zones, bounds, standingByZone)
+-- A forest's zones never change, so its tiles follow from the turns: previous, the forest's last grid, is returned
+-- when the turns and settledness are the same.
+function ForestGrid.build(zones, bounds, standingByZone, previous)
+    local turnsOf, settled = {}, true
+    for index, zone in ipairs(zones) do
+        local sourceKey = zone.sourceX .. "_" .. zone.sourceZ
+        local turns = turnByStanding(sourceKey, standingByZone[zone.x .. "," .. zone.z])
+        if turns == nil and groundTurns(sourceKey).turnMatters then settled = false end
+        turnsOf[index] = turns or 0
+    end
+    if previous ~= nil and previous.settled == settled then
+        local same = true
+        for index, turns in ipairs(turnsOf) do same = same and previous.turns[index] == turns end
+        if same then return previous end
+    end
     local grid = setmetatable({
         minX = bounds.minX, minZ = bounds.minZ, width = bounds.width, length = bounds.length,
         walkable = {}, -- tile index -> true
-        turns = {}, -- zone index -> quarter turns
-        settled = true,
+        turns = turnsOf, -- zone index -> quarter turns
+        settled = settled,
     }, Grid)
     for index, zone in ipairs(zones) do
-        local zoneKey, sourceKey = zone.x .. "," .. zone.z, zone.sourceX .. "_" .. zone.sourceZ
-        local template = groundTurns(sourceKey)
-        local turns = turnByStanding(sourceKey, standingByZone[zoneKey])
-        if turns == nil and template.turnMatters then grid.settled = false end
-        turns = turns or 0
-        grid.turns[index] = turns
-        local ground = template.ground[turns]
+        local ground = groundTurns(zone.sourceX .. "_" .. zone.sourceZ).ground[turnsOf[index]]
         for position = 1, #ground, 2 do
             grid.walkable[grid:index(zone.x + ground[position], zone.z + ground[position + 1])] = true
         end
     end
     return grid
-end
-
--- Returns whether two grids have the same extent, turns, walkable tiles and settledness.
-function ForestGrid.same(first, second)
-    if first == nil or second == nil or first.minX ~= second.minX or first.minZ ~= second.minZ
-        or first.width ~= second.width or first.length ~= second.length or #first.turns ~= #second.turns
-        or first.settled ~= second.settled then
-        return false
-    end
-    for index = 1, #first.turns do
-        if first.turns[index] ~= second.turns[index] then return false end
-    end
-    for index in pairs(first.walkable) do
-        if not second.walkable[index] then return false end
-    end
-    for index in pairs(second.walkable) do
-        if not first.walkable[index] then return false end
-    end
-    return true
 end
 
 -- Returns a tile's index in the grid.
@@ -155,8 +144,8 @@ function Grid:tile(index)
     return self.minX + offset % self.width, self.minZ + offset // self.width
 end
 
--- Drops the template zones' turned tiles and standing heights, which every forest reuses, once no forest is
--- likely soon. The next grid makes them again from the data, which is why the walkability rows are kept.
+-- Drops the template zones' turned tiles and standing heights on leaving a forest.
+-- The next grid makes them again from the data, which is why the walkability rows are kept.
 function ForestGrid.forgetTemplates()
     groundTurnsCache, standingTurnsCache = {}, {}
 end

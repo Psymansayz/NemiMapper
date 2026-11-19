@@ -79,9 +79,8 @@ local function showCounts()
     local kinds, _, missed, missedKinds = Forest.scoutCounts()
     local missedOf = {}
     for _, feature in ipairs(missed) do missedOf[feature.key] = (missedOf[feature.key] or 0) + 1 end
-    -- The count goes green on a 9/9 forest, or when the alert's own test passes with it set to every node still needed.
-    local complete = kinds >= #ForestFeatures.nodes
-        or Settings.alertOnNeededNodes and FullForestAlert.forestIsComplete(kinds, missedKinds)
+    -- The count goes green when the alert's test passes.
+    local complete = FullForestAlert.forestIsComplete(kinds, missedKinds)
     setText(parts.countText, kinds .. (kinds == 1 and " Node" or " Nodes"),
         complete and COMPLETE_COLOUR or INCOMPLETE_COLOUR)
     -- Locations arrive over the forest's first server ticks, so the count can rise until the search settles.
@@ -123,9 +122,7 @@ local function widthNeeded(PrettyUI, numberWidth, wordsWidth, isBlocking)
 end
 
 -- Opening it again brings it to the front. While the full-forest alert blocks the game, it has the unblock button.
-local openedWith = nil -- the last open's arguments, to rebuild the window with the unblock button
 function ScoutWindow.open(PrettyUI, pluginLayer, onOpenMap)
-    openedWith = { PrettyUI = PrettyUI, pluginLayer = pluginLayer, onOpenMap = onOpenMap }
     if isOpen() then return parts.window:Show() end
     local isBlocking = FullForestAlert.isBlocking()
     local numberWidth = monsterNumberWidth()
@@ -166,19 +163,15 @@ function ScoutWindow.open(PrettyUI, pluginLayer, onOpenMap)
     showCounts()
 end
 
--- Called when what was found changes or the search ends.
+-- Called when what was found changes, the search ends or a setting the window shows changes.
 function ScoutWindow.showForest()
     if isOpen() then showCounts() end
 end
+ScoutWindow.showSettings = ScoutWindow.showForest
 
 -- Called when a monster spawns, which changes nothing else shown.
 function ScoutWindow.showMonsters()
     if isOpen() and Forest.bounds ~= nil then showMonsters() end
-end
-
--- Called when a setting the window shows changes.
-function ScoutWindow.showSettings()
-    if isOpen() then showCounts() end
 end
 
 -- Destroys the unblock button a frame after its click hid it, as a component can't be destroyed in its own click.
@@ -195,17 +188,11 @@ local function removeUnblockButton()
     window:SetSize(window.root.width, window.root.height - BUTTON_ROW)
 end
 
--- Shows the unblock button with isBlocking, or removes it without.
--- Adding it rebuilds the window in place; removing it hides it now and destroys it next frame.
-function ScoutWindow.showBlocking(isBlocking)
-    if not isOpen() then return end
-    if isBlocking and parts.unblockButton == nil then
-        ScoutWindow.close()
-        ScoutWindow.open(openedWith.PrettyUI, openedWith.pluginLayer, openedWith.onOpenMap)
-    elseif not isBlocking and parts.unblockButton ~= nil then
-        parts.unblockButton.root.hidden = true
-        Event.Draw.Subscribe(UNBLOCK_SUBSCRIPTION, removeUnblockButton)
-    end
+-- Removes the unblock button: hides it now and destroys it next frame.
+function ScoutWindow.dropUnblockButton()
+    if not isOpen() or parts.unblockButton == nil then return end
+    parts.unblockButton.root.hidden = true
+    Event.Draw.Subscribe(UNBLOCK_SUBSCRIPTION, removeUnblockButton)
 end
 
 ScoutWindow.isOpen = isOpen

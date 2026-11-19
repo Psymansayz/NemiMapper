@@ -27,11 +27,6 @@ local SETTLING_TICKS = 8 -- server ticks to keep scanning after the last find or
 -- loaded inside the forest). Finds arrive over the first 2-4 ticks, never more than 2 apart.
 -- Scans still run for SETTLING_TICKS, so a late find still shows.
 local SHOWN_SETTLED_AFTER = 4
-local SAME_NPC_DISTANCE = 16 -- tiles
-local NPC_DRIFTED = 2 -- tiles an NPC must drift from its marker before the marker moves
--- Minimum server ticks between an NPC marker's moves.
--- The lightning wanders about a tile a tick, and each move redraws routes.
-local NPC_MOVE_TICKS = 2
 
 Forest.isInside = false
 Forest.isSearching = false -- more may still be found
@@ -126,20 +121,23 @@ local taskItemsHeld = {} -- task -> true while its doneItem is held, as last che
 local currentQuest = GameIds.playerVariable("RAID1_GOEBIE_CURRENT_QUEST")
 local currentQuestBaseID = currentQuest ~= nil and currentQuest.baseVar ~= nil and currentQuest.baseVar.id or nil
 
+-- Returns how many are claimed.
 local function readClaimed()
     claimedNow = {}
+    local count = 0
     for key, variable in pairs(claimedVariableOf) do
-        if variable.value ~= 0 then claimedNow[key] = true end
+        if variable.value ~= 0 then claimedNow[key], count = true, count + 1 end
     end
+    return count
 end
 
 -- Each task's current-quest value  from the game's enum.
 local questOf = {}
 for _, task in ipairs(ForestFeatures.trinksTasks) do
-    local found, quest = pcall(function()
-        return config.Enum.RAID1_GOEBIE_IDS_TO_STRUCTS:GetInputValues(config.Struct[task.questStruct])[1]
-    end)
-    if found and quest ~= nil then
+    -- an unknown struct's name reads as nil
+    local struct = config.Struct[task.questStruct]
+    local quest = struct and config.Enum.RAID1_GOEBIE_IDS_TO_STRUCTS:GetInputValues(struct)[1]
+    if quest ~= nil then
         questOf[task] = quest
     else
         GameIds.noteUnknown("Struct", task.questStruct)
@@ -148,8 +146,13 @@ end
 
 -- Each task's VarBit marking its target's part done, and the item it gives, if any.
 local doneVariableOf, doneItemOf = {}, {}
+local doneBaseIDs = {} -- the done variables' base variables, which are what the server sends
 for _, task in ipairs(ForestFeatures.trinksTasks) do
-    if task.doneVar ~= nil then doneVariableOf[task] = GameIds.playerVariable(task.doneVar) end
+    if task.doneVar ~= nil then
+        local variable = GameIds.playerVariable(task.doneVar)
+        doneVariableOf[task] = variable
+        if variable ~= nil and variable.baseVar ~= nil then doneBaseIDs[variable.baseVar.id] = true end
+    end
     if task.doneItem ~= nil then doneItemOf[task] = GameIds.resolve("Obj", task.doneItem) end
 end
 
@@ -202,10 +205,7 @@ end
 
 -- Reads which nodes the player has claimed today
 function Forest.readClaimedToday()
-    readClaimed()
-    local count = 0
-    for _ in pairs(claimedNow) do count = count + 1 end
-    return count
+    return readClaimed()
 end
 
 -- Number of Trinks' tasks done today.
@@ -374,8 +374,8 @@ end
 -- and ends the search. Later events at those tiles are changes (a barrier cut, a key taken). Nodes are announced as
 -- their MultiLoc (`addedAs`).
 local anyAnnounced = false -- a feature was announced, so the locations are not scanned
-local announcedInBurst = 0 -- features announced in the first burst
-local announcedSinceTick = 0
+local announcedInBurst = false -- a feature was announced in the first burst
+local announcedThisTick = false
 local announcementsEnded = false
 local searchEnded = false -- the search has shown as done once this entry; it does not come back
 local announcingTicksLeft = 0 -- server ticks to wait for the burst; set only on a region's creation
@@ -394,20 +394,12 @@ end
 local function noteNpc(npcEntity)
     local feature = featureOfNpcID[npcEntity.configID]
     if feature == nil then return noteMonster(npcEntity) end
-    local coord = npcEntity.coordGrid
     -- An NPC back in view is a new entity, but a forest has at most one of each NPC listed (the lightning, the lost
-    -- goebie, the Traitor), so the marker moves to it rather than a second one being added. 
-    -- Nearer, its marker follows once it drifts more than NPC_DRIFTED tiles. 
-    -- The 3d box highlight follows the live entity exactly.
+    -- goebie, the Traitor), so it keeps its marker, which followNpcs moves to it.
     for _, known in ipairs(npcsFound) do
-        if known.feature == feature then
-            if math.abs(known.x - coord.x) > SAME_NPC_DISTANCE or math.abs(known.z - coord.z) > SAME_NPC_DISTANCE then
-                known.x, known.z = coord.x + 0.5, coord.z + 0.5
-                if Forest.onNpcMoved then Forest.onNpcMoved(known) end
-            end
-            return
-        end
+        if known.feature == feature then return end
     end
+    local coord = npcEntity.coordGrid
     npcsFound[#npcsFound + 1] = {
         feature = feature, x = coord.x + 0.5, z = coord.z + 0.5, width = 1, length = 1, isNpc = true,
         npcID = npcEntity.configID, -- to find the live entity for the highlight
@@ -418,10 +410,10 @@ end
 
 -- Returns a found location's entry: its centre in tiles, its size and shape as placed (width and length turned
 -- with it), and the box around its model (src/game/model_bounds.lua).
-local function locationEntry(feature, locID, coord, rotation, width, length, shapeType)
+local function locationEntry(feature, coord, rotation, width, length, shapeType)
     return {
         feature = feature, x = coord.x + width / 2, z = coord.z + length / 2, width = width, length = length,
-        shapeType = shapeType, bounds = ModelBounds.of(locID, rotation, width, length),
+        shapeType = shapeType, bounds = ModelBounds.of(feature, rotation, width, length),
     }
 end
 
@@ -450,7 +442,6 @@ end
 -- and doors. On a fresh entry the announcement gives everything the scans would, so the locations are scanned only 
 -- if the events are missed.
 local announcementMissed = false
-local NO_LOCATIONS = {}
 
 -- Scans every location the client holds, unless the announcement gave them, and reads the zones' standing heights
 -- and the NPCs. Asking the game for a config's locations, minus hidden ones, finds only those within about 45 tiles,
@@ -460,17 +451,18 @@ local function scan()
     -- only a find or new change restarts the settling
     local changedBefore = foundChanged
     foundChanged = false
-    local scansLocations = announcementMissed or not anyAnnounced
-    for _, location in ipairs(scansLocations and LocList.All() or NO_LOCATIONS) do
-        local feature = featureOfLocID[location.configID]
-        if feature ~= nil then
-            local coord = location.coordGrid
-            local packedCoord = coord:ToPacked()
-            local known = locationsFound[packedCoord]
-            if known == nil or known.feature ~= feature then
-                locationsFound[packedCoord] = locationEntry(feature, location.configID, coord, location.rotationType,
-                    location.width, location.length, location.shapeType)
-                foundChanged = true
+    if announcementMissed or not anyAnnounced then
+        for _, location in ipairs(LocList.All()) do
+            local feature = featureOfLocID[location.configID]
+            if feature ~= nil then
+                local coord = location.coordGrid
+                local packedCoord = coord:ToPacked()
+                local known = locationsFound[packedCoord]
+                if known == nil or known.feature ~= feature then
+                    locationsFound[packedCoord] = locationEntry(feature, coord, location.rotationType,
+                        location.width, location.length, location.shapeType)
+                    foundChanged = true
+                end
             end
         end
     end
@@ -486,8 +478,8 @@ local function locationEntries()
     return entries
 end
 
--- Builds the forest's grid, keeping the last one built if the new one is the same, so routes and plan searches
--- cached on it stay valid.
+-- Builds the forest's grid, keeping the last one built if the new one would be the same, so routes and plan
+-- searches cached on it stay valid. Returns whether it changed.
 -- Forest.grid stays nil until a grid is settled (every zone whose turn matters turned by its heights) or
 -- GRID_WAIT_TICKS have passed since entering, so the map's zones, the routes and the plans are not worked out on
 -- the unturned zones of the first ticks, while the zones load.
@@ -499,10 +491,11 @@ local restoreAfterScans = false
 local gridDueTick = 0 -- the server tick from which an unsettled grid is used
 local function buildGrid()
     gridStale = false
-    local grid = ForestGrid.build(Forest.zones, Forest.bounds, Forest.standingByZone)
-    if ForestGrid.same(builtGrid, grid) then return end
+    local grid = ForestGrid.build(Forest.zones, Forest.bounds, Forest.standingByZone, builtGrid)
+    if grid == builtGrid then return false end
     builtGrid, Forest.zoneTurns = grid, grid.turns
     if grid.settled or Forest.ticks >= gridDueTick then Forest.grid = grid end
+    return true
 end
 
 -- Puts the player's draw distance back once the grid is in use, and after a reload once the scans settle too.
@@ -535,8 +528,6 @@ local function publish()
         end
     end
     Forest.found, Forest.countOf = found, countOf
-    -- the scan has just read the heights
-    if gridStale then buildGrid() end
     if Forest.onChanged then Forest.onChanged() end
 end
 
@@ -605,35 +596,9 @@ local function followPlayer()
     if Forest.entryTile == nil then Forest.entryTile = Forest.playerTile end
     -- on each new zone: the zones' heights not read yet are tried again
     if last == nil or last.x // ZONE_SIZE ~= x // ZONE_SIZE or last.z // ZONE_SIZE ~= z // ZONE_SIZE then
-        if readStanding() then
-            buildGrid()
-            if Forest.onChanged then Forest.onChanged() end
-        end
+        if readStanding() and buildGrid() and Forest.onChanged then Forest.onChanged() end
     end
     if Forest.onMoved then Forest.onMoved() end
-end
-
--- The template caches (forest_grid.lua) outlive a forest, as every forest reuses them, but five minutes after
--- leaving the player is unlikely to enter another soon, so they go then and the next entry makes them again.
--- The client has no clock, so the time is counted in server ticks, listened to only while the countdown runs;
--- entering again stops it.
-local EXPIRY_SUBSCRIPTION = "nemi_mapper_forest_expiry"
-local EXPIRY_TICKS = 500 -- five minutes
-local expiryTicksLeft = 0
-local function stopExpiry()
-    if expiryTicksLeft <= 0 then return end
-    expiryTicksLeft = 0
-    Event.ServerLogic.Unsubscribe(EXPIRY_SUBSCRIPTION)
-end
-local function onExpiryTick()
-    expiryTicksLeft = expiryTicksLeft - 1
-    if expiryTicksLeft > 0 then return end
-    Event.ServerLogic.Unsubscribe(EXPIRY_SUBSCRIPTION)
-    ForestGrid.forgetTemplates()
-end
-local function expireTemplatesLater()
-    if expiryTicksLeft <= 0 then Event.ServerLogic.Subscribe(EXPIRY_SUBSCRIPTION, onExpiryTick) end
-    expiryTicksLeft = EXPIRY_TICKS
 end
 
 -- Drops everything of a forest on leaving, as the instance is gone once all players leave. The grid goes with the
@@ -665,7 +630,7 @@ local function stopWatching()
         Forest.isInside, Forest.isSearching = false, false
         forgetForest()
         if Forest.onLeft then Forest.onLeft() end
-        expireTemplatesLater()
+        ForestGrid.forgetTemplates()
     end
 end
 
@@ -687,7 +652,7 @@ local function onLocationAdded(event)
     local width, length = config.width, config.length
     -- a config's size is unrotated; a quarter turn swaps it
     if event.rotationType % 2 == 1 then width, length = length, width end
-    local entry = locationEntry(feature, config.id, coord, event.rotationType, width, length, event.shapeType)
+    local entry = locationEntry(feature, coord, event.rotationType, width, length, event.shapeType)
     -- a change at a known tile updates its entry in place, so plans and routes keep the same object
     local known = locationsFound[packedCoord]
     if known ~= nil then
@@ -697,7 +662,7 @@ local function onLocationAdded(event)
     end
     anyAnnounced, foundChanged = true, true
     if announcingTicksLeft > 0 and not announcementsEnded then
-        announcedInBurst, announcedSinceTick = announcedInBurst + 1, announcedSinceTick + 1
+        announcedInBurst, announcedThisTick = true, true
     end
 end
 
@@ -706,7 +671,6 @@ local function onLocationRemoved(event)
 end
 
 local function enter(region)
-    stopExpiry()
     Forest.isInside = true
     gridDueTick = Forest.ticks + GRID_WAIT_TICKS
     Forest.zones, Forest.bounds, Forest.openings = region.zones, region.bounds, region.openings
@@ -735,34 +699,31 @@ local function enter(region)
             readClaimed()
             foundChanged = true
         end
-        -- a task taken or finished in the forest
-        if event.var.id == currentQuestBaseID then foundChanged = true end
+        -- a task taken or finished, or its target done (the Traitor killed)
+        if event.var.id == currentQuestBaseID or doneBaseIDs[event.var.id] then foundChanged = true end
     end)
     -- The draw distance goes up to High until the grid settles (draw_distance.lua). Only from Low does the server then
     -- send more (the far map squares, a tick later): that is waited for as a second announcement, and quiet ticks end
     -- the search if none comes. From Medium the server has sent the whole forest already, so nothing is waited for.
     if DrawDistance.raise() then
-        announcedInBurst, announcedSinceTick, announcementsEnded = 0, 0, false
+        announcedInBurst, announcedThisTick, announcementsEnded = false, false, false
         announcingTicksLeft = ANNOUNCING_TICKS
     end
     if Forest.onEntered then Forest.onEntered() end
 end
 
--- A found NPC that drifts from its marker has the marker moved to it, so its route ends at
--- it. Checked once a server tick, moved at most every NPC_MOVE_TICKS to reduce recalculations.
-local npcMoveTicksLeft = 0
+-- Moves each found NPC's marker to its tile once a server tick, so its route ends at it.
 local function followNpcs()
-    npcMoveTicksLeft = npcMoveTicksLeft - 1
-    if npcMoveTicksLeft > 0 then return end
     for _, entry in ipairs(npcsFound) do
         for _, npcEntity in ipairs(NPCList.ByConfigID(entry.npcID)) do
-            local coord = npcEntity.coordGrid
-            local offX, offZ = math.abs(coord.x + 0.5 - entry.x), math.abs(coord.z + 0.5 - entry.z)
-            if npcEntity.isValid and offX <= SAME_NPC_DISTANCE and offZ <= SAME_NPC_DISTANCE
-                and (offX > NPC_DRIFTED or offZ > NPC_DRIFTED) then
-                entry.x, entry.z = coord.x + 0.5, coord.z + 0.5
-                npcMoveTicksLeft = NPC_MOVE_TICKS
-                if Forest.onNpcMoved then Forest.onNpcMoved(entry) end
+            if npcEntity.isValid then
+                local coord = npcEntity.coordGrid
+                local x, z = coord.x + 0.5, coord.z + 0.5
+                if entry.x ~= x or entry.z ~= z then
+                    entry.x, entry.z = x, z
+                    if Forest.onNpcMoved then Forest.onNpcMoved(entry) end
+                end
+                break
             end
         end
     end
@@ -773,10 +734,8 @@ end
 local function onServerTick()
     Forest.ticks = Forest.ticks + 1
     -- a tick with nothing new announced completes the announcement
-    if not announcementsEnded and announcedInBurst > 0 and announcedSinceTick == 0 then
-        announcementsEnded = true
-    end
-    announcedSinceTick = 0
+    if not announcementsEnded and announcedInBurst and not announcedThisTick then announcementsEnded = true end
+    announcedThisTick = false
     announcingTicksLeft = announcingTicksLeft - 1
     if not Forest.isInside then
         local isForest = nil
@@ -790,6 +749,8 @@ local function onServerTick()
         if region == nil then return end
         enter(region)
     end
+    -- the scans read the player's level, and the player is briefly unavailable while the world changes
+    if not Player.IsAvailable() then return end
     -- While the forest settles, the zones' heights and the NPCs are read each tick, and the locations too until
     -- something is announced; after that the locations' changes come as events, and NPCs are looked for when some
     -- arrive.
@@ -815,8 +776,9 @@ local function onServerTick()
     if Forest.grid == nil and builtGrid ~= nil and Forest.ticks >= gridDueTick then
         Forest.grid, foundChanged = builtGrid, true
     end
-    -- Heights read by a scan change the grid without a find
-    if foundChanged or gridStale then publish() end
+    -- heights read by a scan may change the grid without a find
+    if gridStale and buildGrid() then foundChanged = true end
+    if foundChanged then publish() end
     followPlayer()
     restoreDrawDistanceWhenDone()
 end
@@ -826,7 +788,7 @@ end
 local function watchRegion(isNew)
     arrivalTicksLeft = ARRIVAL_TICKS
     restoreAfterScans, announcementMissed = not isNew, not isNew
-    anyAnnounced, announcedInBurst, announcedSinceTick, announcementsEnded = false, 0, 0, false
+    anyAnnounced, announcedInBurst, announcedThisTick, announcementsEnded = false, false, false, false
     announcingTicksLeft = isNew and ANNOUNCING_TICKS or 0
     Event.ServerLogic.Subscribe(SUBSCRIPTION, onServerTick)
     Event.LocAdded.Subscribe(SUBSCRIPTION, onLocationAdded)
@@ -935,12 +897,11 @@ function Forest.start()
     if World.IsAvailable() and World.IsRegion() then watchRegion(false) end
 end
 
--- Called on leaving the game and at shutdown: nothing is listened for, and the template caches go at once.
+-- Called on leaving the game and at shutdown: nothing is listened for, and the template caches go.
 function Forest.stop()
     Event.RegionCreated.Unsubscribe(SUBSCRIPTION)
     Event.WorldCreated.Unsubscribe(SUBSCRIPTION)
     stopWatching()
-    stopExpiry()
     ForestGrid.forgetTemplates()
 end
 

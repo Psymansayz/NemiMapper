@@ -135,8 +135,9 @@ clears the highlights and saves the settings.
 
 ### Game ids (`game_ids.lua`)
 Every number the game names is referred to by its name and resolved once at load: `GameIds.resolve(kind, name)`
-returns the id, or nil for a name the game does not know (the client gives -1). Unknown names are collected in
-`GameIds.unresolved`, which `dev` prints. Runtime code compares the resolved ids only.
+returns the id, or nil for a name the game does not know (the client gives -1; `var.VarPlayer`, `GameKey` and
+`config.Struct` give nil, and none raise an error). Unknown names are collected in `GameIds.unresolved`, which `dev`
+prints. Runtime code compares the resolved ids only.
 
 ### The forest (`Forest`, in `forest.lua`)
 `Forest` is the shared state of the forest the player is in. Other modules read its fields; only `forest.lua` writes
@@ -163,7 +164,7 @@ them.
 **An entry in `Forest.found`** is `{ feature, x, z, width, length, shapeType, bounds, isUsed }`. `x` and `z` are the
 centre in tiles, and `width` and `length` the size as placed (turned with the location). `bounds` is the model box
 from `ModelBounds`. `isUsed` is set on nodes whose claim VarBit is set. NPC entries also have `isNpc` and `npcID`;
-their `x` and `z` follow the NPC once it drifts more than two tiles (`followNpcs`). Entries keep their identity while
+their `x` and `z` follow the NPC's tile each server tick (`followNpcs`). Entries keep their identity while
 the feature stays at that tile: plans and routes compare entries, and a change announced at a known tile updates its
 entry in place.
 
@@ -193,7 +194,7 @@ on leaving.
 settled }` with `grid:index(x, z)` and `grid:tile(index)`. For each zone it finds the quarter turn whose template
 heights (`template_standing`) best match the heights read from the client, then marks that zone's template
 walkable tiles (`zone_walkability`), turned the same way. A zone whose turn matters but cannot be told yet makes the
-grid unsettled. Turned templates are cached and dropped five minutes after leaving.
+grid unsettled. Turned templates are cached and dropped on leaving. A build whose turns match the last grid's returns that grid.
 
 Searches cache data on the grid itself (`grid.steps`, `grid.stopDistances`), so a new grid is only swapped in when it
 differs from the last (`ForestGrid.same`).
@@ -213,8 +214,8 @@ key stop a door needs, or nil when the key is held.
   (`SolvePlan.neededStops` traces the doors on the way to each target). It also returns doors whose keys are not
   seen yet, and doors whose keys another player has.
 - NAVIGATE's stops are cached (`keptPlan`) by a signature of the found features, the tools held and the keys
-  taken, and by the player's tile. `unneededNow` gives the puzzles no route to a node needs, which the map and
-  highlights can hide.
+  taken; the forest is a tree, so where the player stands does not change them. `unneededNow` gives the puzzles
+  no route to a node needs, which the map and highlights can hide.
 
 **Plans** (`solve_plan.lua`): `SolvePlan.nextStop(grid, player, stops, blocked)` finds the first stop of the shortest
 tour through every reachable stop, respecting doors (a door can only be crossed after its key) and leaving out stops
@@ -252,19 +253,19 @@ Flow:
    point on it. Straying more than three tiles works the route out again.
 5. Window resizes go through an override of the window's `SetSize`, which lays the frame out for the new size.
 
-Every component property is written only when its value changes (`setBox`, `setHidden`, `showLabel`), and the
-window's components are destroyed one by one on close, as the client stalls when the window's own `Destroy` takes
-them all.
+Every component property is written only when its value changes (`setBox`, `setHidden`, `showLabel`). On close
+the window's own `Destroy` takes its components; only the sharing button, which sits beside it, is destroyed apart.
 
 ### World highlights (`highlights.lua`)
 - `wanted()` turns the settings and the route's stops into the highlights wanted now:
-  `name → { entry, colour, x, z, box, beam }`.
+  `name → { entry, colour, x, z, box, faces, beam }`, each kind true when wanted.
 - `shown` holds what exists:
   - locations get `ShapeList` entities (a box, and a beam over the route's target), with shapes shared through
     `shapes`, keyed by size and transparency;
   - NPCs get `ShapeList` instances (edges, faces and beam as separate shapes), moved to the live NPC on each
     `Logic` tick while one is tracked (`followTracked`).
-- `refresh` adds, removes and recolours to match.
+- `refresh` adds, removes and recolours to match. When the target changes, the new beam may be made before the old
+  one goes, within the same call.
 - The chosen route is a flat ribbon on the ground (`routeEntity`, plus `segmentEntity` for the straight run the
   player is on), reshaped in place as the player walks (`trimRoute`).
 
@@ -287,7 +288,6 @@ when every kind is present (or, by a setting, every kind still unclaimed today).
 | Event | Subscribed | Work |
 |---|---|---|
 | `ServerLogic` | While a region is watched | `onServerTick` (forest). |
-| `ServerLogic` | For five minutes after leaving | The template cache's countdown. |
 | `ServerLogic` | For one tick, once the search has ended | The final route. |
 | `LocAdded`, `LocRemoved`, `NPCEntityAdded`, `VarTransmit`, `InventoryUpdated` | While a region is watched | The forest's changes. |
 | `Logic` (50/s) | While an NPC is highlighted | `followTracked` moves its box. |
@@ -308,6 +308,5 @@ Nothing else runs every frame. State the server owns is checked on `ServerLogic`
   The stub test replays logged forests with stand-in globals (`Event`, `World`, `LocList`, `NPCList`, `ui`,
   `PersistentDB`, ...). It lives outside the repo and is run against `dev`.
 - Source files are CRLF in the working copy and lines stay within 120 columns.
-- Changes go to `dev` and `main` alike, except `main.lua` and `full_forest_alert.lua`, which differ (debug buttons,
-  the probe and the alert's test threshold).
+- Changes go to `dev` and `main` alike, except `main.lua`, which differs (the debug buttons and the probe).
 - Regenerate data with the tools on `dev` rather than editing the generated files.

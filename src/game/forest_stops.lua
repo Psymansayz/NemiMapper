@@ -30,6 +30,17 @@ local function tilesOfEntry(entry)
     return { x = left, z = bottom, tiles = footprint }
 end
 
+-- Returns whether a key's or door's puzzle is unsolved: its door still stands.
+local function isUnsolved(feature)
+    return not Forest.doorsGone[feature.pair.barrier.key]
+end
+
+-- Returns whether a found feature is a mapping stop: a node not claimed today, or the active task's target.
+local function isMapStop(entry)
+    local feature = entry.feature
+    return (feature.kind == "node" and not entry.isUsed) or (feature.kind == "task" and Forest.isTaskActive(feature))
+end
+
 -- Returns the found features of a kind as tilesOfEntry gives them.
 function ForestStops.tilesOfKind(kind, key)
     local tiles = {}
@@ -56,12 +67,10 @@ end
 -- Returns the barriers' tiles, which routes to a tool or barrier do not cross.
 function ForestStops.barrierTiles()
     local blocked = {}
-    for _, entry in ipairs(Forest.found) do
-        if entry.feature.kind == "barrier" then
-            for _, tile in ipairs(tilesOfEntry(entry).tiles) do
-                local index = Forest.grid:index(tile.x, tile.z)
-                if index ~= nil then blocked[index] = true end
-            end
+    for _, barrier in ipairs(ForestStops.tilesOfKind("barrier")) do
+        for _, tile in ipairs(barrier.tiles) do
+            local index = Forest.grid:index(tile.x, tile.z)
+            if index ~= nil then blocked[index] = true end
         end
     end
     return blocked
@@ -94,7 +103,7 @@ end
 -- Returns whether a key or door is still needed
 function ForestStops.isPuzzleLeft(entry, held)
     local feature = entry.feature
-    return not Forest.doorsGone[feature.pair.barrier.key] and not (feature.kind == "source" and held[feature.key])
+    return isUnsolved(feature) and not (feature.kind == "source" and held[feature.key])
 end
 
 -- Returns a found feature as a plan stop, with its tiles and the colour of the route to it.
@@ -114,7 +123,7 @@ end
 
 function ForestStops.isWorkLeft(feature)
     if feature.kind == "node" then return not Forest.isNodeClaimed(feature.key) end
-    if feature.kind == "source" then return not Forest.doorsGone[feature.pair.barrier.key] end
+    if feature.kind == "source" then return isUnsolved(feature) end
     return feature.kind == "task" and Forest.isTaskActive(feature)
 end
 
@@ -122,10 +131,8 @@ end
 function ForestStops.mapStops()
     local stops = {}
     for _, entry in ipairs(Forest.found) do
-        local feature = entry.feature
-        if (feature.kind == "node" and not entry.isUsed)
-            or (feature.kind == "task" and Forest.isTaskActive(feature)) then
-            stops[#stops + 1] = ForestStops.stopOf("key", entry, ForestFeatures.colourOf(feature))
+        if isMapStop(entry) then
+            stops[#stops + 1] = ForestStops.stopOf("key", entry, ForestFeatures.colourOf(entry.feature))
         end
     end
     return stops
@@ -163,8 +170,7 @@ function ForestStops.takenKeyStops()
     local stops = {}
     for _, entry in ipairs(Forest.found) do
         local feature = entry.feature
-        if feature.kind == "source" and Forest.keysTaken[feature.key] and not Forest.doorsGone[feature.pair.barrier.key]
-            then
+        if feature.kind == "source" and Forest.keysTaken[feature.key] and isUnsolved(feature) then
             stops[#stops + 1] = ForestStops.stopOf("key", entry, feature.pair.colour)
         end
     end
@@ -241,9 +247,7 @@ local function planSignature(held)
     if signatureOf.found == Forest.found and signatureOf.held == heldKey then return signatureOf.signature end
     local parts = { heldKey }
     for _, entry in ipairs(Forest.found) do
-        local feature = entry.feature
-        if (feature.kind == "node" and not entry.isUsed) or (feature.kind == "task" and Forest.isTaskActive(feature))
-            or (feature.isPuzzle and not Forest.doorsGone[feature.pair.barrier.key]) then
+        if isMapStop(entry) or (entry.feature.isPuzzle and isUnsolved(entry.feature)) then
             parts[#parts + 1] = tostring(entry)
         end
     end
@@ -251,14 +255,16 @@ local function planSignature(held)
     return signatureOf.signature
 end
 
--- Returns NAVIGATE's stops from the player's tile.
+-- Returns NAVIGATE's stops.
+-- The forest is a tree and the player is never past a standing barrier, so the barriers on the way to each stop are
+-- the same from any tile the player can reach: the stops are worked out again only when the signature changes.
 local kept = {}
 local function keptPlan(held)
     local player = Forest.isInside and Forest.playerTile or nil
     if player == nil or Forest.grid == nil then return nil end
     local signature = planSignature(held)
-    if kept.signature ~= signature or kept.grid ~= Forest.grid or kept.player ~= player then
-        kept.signature, kept.grid, kept.player = signature, Forest.grid, player
+    if kept.signature ~= signature or kept.grid ~= Forest.grid then
+        kept.signature, kept.grid = signature, Forest.grid
         kept.stops, kept.keylessNeeded, kept.takenNeeded, kept.puzzleStops =
             ForestStops.stopsToward(ForestStops.mapStops(), player, held)
         kept.unneeded = nil
