@@ -237,30 +237,26 @@ end
 
 -- Returns what NAVIGATE's stops depend on, as a string: the unclaimed nodes, active tasks and unfinished puzzles
 -- found, the tools in held and the keys another player has.
-local signatureOf = { found = nil, held = nil, signature = nil }
 local function planSignature(held)
-    local heldKeys = {}
-    for key in pairs(held) do heldKeys[#heldKeys + 1] = key end
-    for key in pairs(Forest.keysTaken) do heldKeys[#heldKeys + 1] = "taken:" .. key end
-    table.sort(heldKeys)
-    local heldKey = table.concat(heldKeys, " ")
-    if signatureOf.found == Forest.found and signatureOf.held == heldKey then return signatureOf.signature end
-    local parts = { heldKey }
+    local parts = {}
+    for key in pairs(held) do parts[#parts + 1] = key end
+    for key in pairs(Forest.keysTaken) do parts[#parts + 1] = "taken:" .. key end
+    table.sort(parts)
     for _, entry in ipairs(Forest.found) do
         if isMapStop(entry) or (entry.feature.isPuzzle and isUnsolved(entry.feature)) then
             parts[#parts + 1] = tostring(entry)
         end
     end
-    signatureOf.found, signatureOf.held, signatureOf.signature = Forest.found, heldKey, table.concat(parts, " ")
-    return signatureOf.signature
+    return table.concat(parts, " ")
 end
 
 -- Returns NAVIGATE's stops.
--- The forest is a tree and the player is never past a standing barrier, so the barriers on the way to each stop are
--- the same from any tile the player can reach: the stops are worked out again only when the signature changes.
+-- The player is never past a standing barrier, and the forest's few loops never lead round one, so the barriers on
+-- the way to each stop are the same from any tile the player can reach: the stops are worked out again only when the
+-- signature changes.
 local kept = {}
 local function keptPlan(held)
-    local player = Forest.isInside and Forest.playerTile or nil
+    local player = Forest.playerTile
     if player == nil or Forest.grid == nil then return nil end
     local signature = planSignature(held)
     if kept.signature ~= signature or kept.grid ~= Forest.grid then
@@ -272,10 +268,9 @@ local function keptPlan(held)
     return kept
 end
 
--- Drops the kept plan and the signature on leaving the forest.
+-- Drops the kept plan on leaving the forest.
 function ForestStops.forget()
     kept = {}
-    signatureOf.found, signatureOf.held, signatureOf.signature = nil, nil, nil
 end
 
 local NONE = {}

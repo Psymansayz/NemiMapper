@@ -65,7 +65,6 @@ FullForestAlert.onUnblocked = ScoutWindow.dropUnblockButton
 -- The keybind to open or close the map: the GameKeys bound, in order, unbound until the player binds them on the
 -- settings page.
 local KEYBIND_SUBSCRIPTION = "nemi_mapper_keybinds"
-local keybindsListening = false
 local openMapKeys = {}
 local MODIFIER_BITS = { -- a modifier key's bit in a key event's modifiers
     [GameKey.SHIFT] = ModifierKey.SHIFT, [GameKey.CONTROL] = ModifierKey.CONTROL, [GameKey.ALT] = ModifierKey.ALT,
@@ -91,8 +90,6 @@ local function onKeyDown(event)
 end
 
 local function setKeybindsListening(wanted)
-    if wanted == keybindsListening then return end
-    keybindsListening = wanted
     if wanted then
         Event.KeyDown.Subscribe(KEYBIND_SUBSCRIPTION, onKeyDown)
     else
@@ -170,7 +167,6 @@ Forest.onChanged = function()
     end
 end
 Forest.onMoved = function()
-    ToolsHeld.update(Forest.playerTile)
     MapWindow.showPlayer()
     Highlights.followPlayer()
 end
@@ -215,15 +211,13 @@ local WINDOW_EDGE_WIDTH = 16 -- a PrettyUI window is this much wider than its co
 local SLIDER_LEAST_WIDTH = 160 -- narrower sliders are hard to set precisely
 local ROW_GAP = 2 -- PrettyUI's default gap of 8 spreads the settings too far apart
 
-local function mapChanged() MapWindow.showSettings() end
-local function headerChanged() MapWindow.showHeaderText() end
+-- What each setting's change refreshes; a row's onChange is called with nothing.
+local mapChanged, headerChanged, routesChanged = MapWindow.showSettings, MapWindow.showHeaderText, MapWindow.showRoutes
+local highlightsChanged, scoutChanged = Highlights.refresh, ScoutWindow.showSettings
 local function sharingChanged()
     MapWindow.showSettings()
     ScoutWindow.showSettings()
 end
-local function highlightsChanged() Highlights.refresh() end
-local function routesChanged() MapWindow.showRoutes() end
-local function scoutChanged() ScoutWindow.showSettings() end
 local settingRows = {
     { section = "General" },
     { key = "scoutOpensInForest", name = "Open the scout window automatically",
@@ -591,10 +585,8 @@ local function buildPage(pluginLayer)
 end
 
 local function closePage()
-    if pageStatus ~= nil then
-        Event.VarTransmit.Unsubscribe(DAILY_SUBSCRIPTION)
-        Event.InventoryUpdated.Unsubscribe(DAILY_SUBSCRIPTION)
-    end
+    Event.VarTransmit.Unsubscribe(DAILY_SUBSCRIPTION)
+    Event.InventoryUpdated.Unsubscribe(DAILY_SUBSCRIPTION)
     pageView, pageStatus = closeView(pageView), nil
 end
 

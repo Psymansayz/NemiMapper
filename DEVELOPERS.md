@@ -123,8 +123,8 @@ clears the highlights and saves the settings.
   highlighted NPCs' boxes are their tile, with heights chosen by hand.
 - **Holds:** `{ west, east, south, north, height }` in fine units (512 per tile), from the middle of the tiles the
   thing stands on, keyed by the base location's or NPC's name.
-- **Used by:** `src/game/model_bounds.lua`, which keys the boxes by location id (every form of a feature takes its
-  base location's box) and by NPC feature, then empties the data table, as `require` keeps it for good.
+- **Used by:** `src/game/model_bounds.lua`, which keys the boxes by feature (every form of a feature takes its
+  base location's box), then empties the data table, as `require` keeps it for good.
 
 ### `icon_sizes.lua`
 - **Source:** generated on `dev` by `tools/make_map_art.ps1`, which also makes the pictures in `resources/`.
@@ -159,14 +159,14 @@ them.
 | `keysTaken` | the dialogue: a refusal naming another player | Source key → that player's name; freed when they leave. | Stops (a taken key is a last resort). |
 | `monstersSpawned` | `noteMonster`: attackable NPCs that are not familiars or the forest's own, counted once by uid | A count. | Scout window ("monsters left"). |
 | `playerTile`, `entryTile` | `followPlayer`, each tick | The player's tile, and their first tile in the forest. | Routes, plans, the final route's start. |
-| `ticks`, `npcArrivals` | `onServerTick` | Counters. | Grid timing, the tool grace period, the NPC search in `highlights.lua`. |
+| `ticks` | `onServerTick` | A counter. | Grid timing, the tool grace period. |
 
 **An entry in `Forest.found`** is `{ feature, x, z, width, length, shapeType, bounds, isUsed }`. `x` and `z` are the
 centre in tiles, and `width` and `length` the size as placed (turned with the location). `bounds` is the model box
-from `ModelBounds`. `isUsed` is set on nodes whose claim VarBit is set. NPC entries also have `isNpc` and `npcID`;
-their `x` and `z` follow the NPC's tile each server tick (`followNpcs`). Entries keep their identity while
-the feature stays at that tile: plans and routes compare entries, and a change announced at a known tile updates its
-entry in place.
+from `ModelBounds`. `isUsed` is set on nodes whose claim VarBit is set. NPC entries also have `isNpc`, `npcID` and
+`npcEntity`, the live entity the highlight follows; it, `x` and `z` follow the NPC each server tick (`followNpcs`).
+Entries keep their identity while the feature stays at that tile: plans and routes compare entries, and a change
+announced at a known tile updates its entry in place.
 
 **How features are found.**
 1. On a fresh entry the server announces every node, key and barrier as `LocAdded` events in its first ticks,
@@ -196,8 +196,8 @@ heights (`template_standing`) best match the heights read from the client, then 
 walkable tiles (`zone_walkability`), turned the same way. A zone whose turn matters but cannot be told yet makes the
 grid unsettled. Turned templates are cached and dropped on leaving. A build whose turns match the last grid's returns that grid.
 
-Searches cache data on the grid itself (`grid.steps`, `grid.stopDistances`), so a new grid is only swapped in when it
-differs from the last (`ForestGrid.same`).
+Searches cache data on the grid itself (`grid.steps`, `grid.stopDistances`), which is why a build matching the last
+grid returns it. Heights read on a step reach the grid on the next server tick.
 
 ### Stops, plans and routes
 The words used in the code (also listed at the top of `forest_stops.lua`):
@@ -214,14 +214,14 @@ key stop a door needs, or nil when the key is held.
   (`SolvePlan.neededStops` traces the doors on the way to each target). It also returns doors whose keys are not
   seen yet, and doors whose keys another player has.
 - NAVIGATE's stops are cached (`keptPlan`) by a signature of the found features, the tools held and the keys
-  taken; the forest is a tree, so where the player stands does not change them. `unneededNow` gives the puzzles
-  no route to a node needs, which the map and highlights can hide.
+  taken; the forest's few loops never lead round a barrier, so where the player stands does not change them.
+  `unneededNow` gives the puzzles no route to a node needs, which the map and highlights can hide.
 
-**Plans** (`solve_plan.lua`): `SolvePlan.nextStop(grid, player, stops, blocked)` finds the first stop of the shortest
-tour through every reachable stop, respecting doors (a door can only be crossed after its key) and leaving out stops
-that cannot be reached (each costs more than any tour). It searches once from the player and once from each stop, then runs a dynamic program over
-the sets of stops visited. The map window caches each plan by its inputs (`parts.plans`) and keeps the current target
-while the player follows its route.
+**Plans** (`solve_plan.lua`): `SolvePlan.nextStop(grid, player, stops, alwaysBlocked)` finds the first stop of the
+shortest tour through every reachable stop, respecting doors (a door can only be crossed after its key) and leaving
+out stops that cannot be reached (each costs more than any tour). It searches once from the player and once from
+each stop, then runs a dynamic program over the sets of stops visited. The map window caches each plan by its inputs
+(`parts.plans`) and keeps the current target while the player follows its route.
 
 **Routes** (`routes.lua`) are breadth-first searches over the walkable tiles: four straight steps plus diagonals
 between two open sides, with barrier tiles blocked. A target is reached from the tiles beside it (`tilesRound`).

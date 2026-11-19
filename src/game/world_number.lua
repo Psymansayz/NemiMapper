@@ -12,7 +12,7 @@ local world = nil
 function WorldNumber.read()
     if world == nil and titleID ~= nil then
         local title = ui.Interfaces:GetComponent(titleID)
-        if title ~= nil and title.type == ui.ComponentType.LABEL then
+        if title ~= nil then
             world = title.content:match("RuneScape%s*(%d+)")
         end
     end

@@ -5,8 +5,7 @@ local GameIds = require("src/game/game_ids")
 
 local DialogueText = {}
 
-local dialogueBoxID = GameIds.resolve("Interface", "CHAT_V2_LEFT")
--- The dialogue box's labels: the speaker's name and the line.
+-- The dialogue box's labels: the speaker's name and the line. They read as nil while the box is closed.
 local dialogueLabelIDs = {}
 for _, name in ipairs({ "CHAT_V2_LEFT__TITLE_TEXT", "CHAT_V2_LEFT__CHAT_TEXT" }) do
     dialogueLabelIDs[#dialogueLabelIDs + 1] = GameIds.resolve("Component", name)
@@ -33,11 +32,9 @@ function DialogueText.open()
     texts = {}
     local infoLayer = infoLayerID ~= nil and ui.Interfaces:GetComponent(infoLayerID) or nil
     if infoLayer ~= nil then infoLayer:IterateDynamicComponents(noteDynamicLabel) end
-    if dialogueBoxID ~= nil and ui.Interfaces:GetInterface(dialogueBoxID) ~= nil then
-        for _, labelID in ipairs(dialogueLabelIDs) do
-            local component = ui.Interfaces:GetComponent(labelID)
-            if component ~= nil then noteLabel(component) end
-        end
+    for _, labelID in ipairs(dialogueLabelIDs) do
+        local component = ui.Interfaces:GetComponent(labelID)
+        if component ~= nil then noteLabel(component) end
     end
     local found = texts
     texts = nil

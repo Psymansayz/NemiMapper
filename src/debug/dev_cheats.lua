@@ -2,7 +2,6 @@
 -- (ExecuteConsoleCommand), which work only on the development servers. Each command is logged as CHEAT|.
 
 local ForestFeatures = require("src/data/forest_features")
-local Forest = require("src/game/forest")
 local GameIds = require("src/game/game_ids")
 
 local DevCheats = {}
@@ -44,7 +43,8 @@ function DevCheats.toggleTask()
     local tasks = ForestFeatures.trinksTasks
     local task = tasks[nextTaskIndex]
     nextTaskIndex = nextTaskIndex % #tasks + 1
-    local quest = Forest.questOf(task)
+    local struct = config.Struct[task.questStruct]
+    local quest = struct and config.Enum.RAID1_GOEBIE_IDS_TO_STRUCTS:GetInputValues(struct)[1]
     if quest == nil then return print(LOG_PREFIX .. "CHEAT|no task value known for " .. task.key) end
     setVariable(MET_TRINKS, 1)
     setVariable(CURRENT_TASK, quest)

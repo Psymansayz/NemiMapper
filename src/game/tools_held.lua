@@ -57,9 +57,6 @@ function ToolsHeld.update(playerTile)
         if not held[sourceKey] and barrierNear(sourceKey, playerTile) then usedAt[sourceKey] = Forest.ticks end
     end
     heldBefore = held
-    for sourceKey, tick in pairs(usedAt) do
-        if not isOpening(sourceKey, tick) then usedAt[sourceKey] = nil end
-    end
 end
 
 -- Returns the source keys of the puzzles whose tool the player has (source key -> true), counting a tool still

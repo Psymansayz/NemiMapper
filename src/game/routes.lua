@@ -7,7 +7,6 @@ local Routes = {}
 -- The order breaks ties between equally short ways.
 local STEPS = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } }
 local ORTHOGONAL_STEPS = 4 -- the first four
-local WIDER = 2 -- tiles: a target with no open tile beside it (a misread tile) is reached from this close
 
 -- Returns a tile's steps, as a flat list of triples: the walkable tile stepped to and the two side tiles a diagonal
 -- passes between (0 for an orthogonal step).
@@ -22,7 +21,7 @@ local function stepsFrom(grid, steps, index)
         local sideX, sideZ = 0, 0
         if position > ORTHOGONAL_STEPS then sideX, sideZ = grid:index(x + step[1], z), grid:index(x, z + step[2]) end
         if nextIndex ~= nil and grid.walkable[nextIndex]
-            and (sideX == 0 or (grid.walkable[sideX or 0] and grid.walkable[sideZ or 0])) then
+            and (sideX == 0 or (grid.walkable[sideX] and grid.walkable[sideZ])) then
             list[#list + 1], list[#list + 2], list[#list + 3] = nextIndex, sideX, sideZ
         end
     end
@@ -67,35 +66,21 @@ local function search(grid, startTiles, blocked, distancesOnly)
     return { grid = grid, distance = distance, parent = parent }
 end
 
--- Adds a tile to tilesRound's list (added: the indexes listed, onTarget: the target's own) if it is new, walkable
--- and not blocked.
-local function addTileRound(grid, tiles, added, onTarget, blocked, x, z)
-    local index = grid:index(x, z)
-    if index ~= nil and not added[index] and not onTarget[index] and grid.walkable[index] and not blocked[index] then
-        added[index] = true
-        tiles[#tiles + 1] = { x = x, z = z, index = index }
-    end
-end
-
 -- Returns the walkable tiles a target is used from: those orthogonally beside it, as the game does not allow using
--- doors, keys or nodes diagonally, or failing any, those within WIDER of it.
+-- doors, keys or nodes diagonally. The game places every target with at least one.
 -- target: a tile (x, z), with tiles listing every tile it stands on when there are several.
-local function tilesRound(grid, target, blocked)
-    blocked = blocked or NONE
+-- A search never reaches a blocked tile, so the nearest of these is never one.
+local function tilesRound(grid, target)
     local footprint, onTarget = target.tiles or { target }, {}
     for _, tile in ipairs(footprint) do onTarget[grid:index(tile.x, tile.z) or 0] = true end
-    local tiles, added = {}, {}
+    local tiles = {}
     for _, tile in ipairs(footprint) do
         for position = 1, ORTHOGONAL_STEPS do
-            local step = STEPS[position]
-            addTileRound(grid, tiles, added, onTarget, blocked, tile.x + step[1], tile.z + step[2])
-        end
-    end
-    if #tiles > 0 then return tiles end
-    for _, tile in ipairs(footprint) do
-        for aroundZ = tile.z - WIDER, tile.z + WIDER do
-            for aroundX = tile.x - WIDER, tile.x + WIDER do
-                addTileRound(grid, tiles, added, onTarget, blocked, aroundX, aroundZ)
+            local x, z = tile.x + STEPS[position][1], tile.z + STEPS[position][2]
+            local index = grid:index(x, z)
+            if index ~= nil and not onTarget[index] and grid.walkable[index] then
+                onTarget[index] = true -- listed once
+                tiles[#tiles + 1] = { x = x, z = z, index = index }
             end
         end
     end
@@ -179,21 +164,20 @@ end
 -- For the solving plan (src/game/solve_plan.lua), which searches from many places.
 Routes.search, Routes.tilesRound, Routes.nearest = search, tilesRound, nearest
 
--- Returns the route from the start of <found> to the nearest of targetTiles,
--- avoiding <blocked>
-function Routes.routeFrom(found, grid, targetTiles, blocked)
+-- Returns the route from the start of <found> to the nearest of targetTiles.
+function Routes.routeFrom(found, grid, targetTiles)
     local tiles = {}
     for _, target in ipairs(targetTiles) do
-        for _, tile in ipairs(tilesRound(grid, target, blocked)) do tiles[#tiles + 1] = tile end
+        for _, tile in ipairs(tilesRound(grid, target)) do tiles[#tiles + 1] = tile end
     end
     local best, bestDistance = nearest(found, tiles)
     if best == nil then return nil end
     return straightPieces(wayBack(found, best.index)), bestDistance
 end
 
--- Returns the route from <from> to the nearest of targetTiles
+-- Returns the route from <from> to the nearest of targetTiles, avoiding <blocked>.
 function Routes.routeTo(grid, from, targetTiles, blocked)
-    return Routes.routeFrom(search(grid, { from }, blocked), grid, targetTiles, blocked)
+    return Routes.routeFrom(search(grid, { from }, blocked), grid, targetTiles)
 end
 
 -- Returns the route to the reachable tile nearest the centre of the forest.
