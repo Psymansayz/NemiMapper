@@ -1,6 +1,6 @@
 -- Raises the draw distance to High temporarily on entering the forest.
--- On High or Ultra every zone's models load by the third tick, so the whole forest's data is read at once
--- at Medium or low the far zones load only as the player nears them.
+-- On High or Ultra every zone's models load by the third tick, so the whole forest's data is read at once.
+-- At Medium or Low the far zones load only as the player nears them.
 -- Once the forest map is settled, the plugin keeps the scanned data even after the client
 -- lets far squares go again at Low, so the player's setting can be restored.
 
@@ -11,6 +11,8 @@ local SENDS_WHOLE_FOREST = 1 -- Medium: the server sends the whole forest
 
 local raisedFrom = nil -- the player's own setting, while the plugin has raised it
 
+-- Raises the draw distance to High if it is lower. Returns whether it was below Medium, as the server then sends the
+-- far map squares a tick later.
 function DrawDistance.raise()
     local option = game.options.DrawDistance
     if option.setting >= LOADS_EVERY_ZONE then return false end

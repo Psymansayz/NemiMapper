@@ -164,10 +164,6 @@ local function boxWanted(entry, held, unneeded)
     return feature.kind == "task" and Settings.highlightTasks and Forest.isTaskActive(feature)
 end
 
-local function beamWanted(entry)
-    return not Settings.hideTargetBeam and beamTarget == entry
-end
-
 -- Returns what to highlight now, as [name] = { entry, colour, x, z, box, faces, beam }, each kind true when wanted.
 -- An NPC's box is drawn as edges (box) and faces.
 local function wanted(held)
@@ -179,7 +175,7 @@ local function wanted(held)
         unneeded = ForestStops.unneededNow(held)
     end
     for _, entry in ipairs(Forest.found) do
-        local box, beam = boxWanted(entry, held, unneeded), beamWanted(entry)
+        local box, beam = boxWanted(entry, held, unneeded), not Settings.hideTargetBeam and beamTarget == entry
         if box or beam then
             local feature = entry.feature
             local left, bottom = Forest.southWestOf(entry)
@@ -194,8 +190,9 @@ end
 
 -- Makes one entity of a feature's highlight: the box at its south-west tile (wantedHighlight.x, wantedHighlight.z),
 -- the beam at the box's middle.
-local function makeEntity(name, kind, wantedHighlight, level, sizeKey)
+local function makeEntity(name, kind, wantedHighlight, sizeKey)
     local entry, left, bottom = wantedHighlight.entry, wantedHighlight.x, wantedHighlight.z
+    local level = Player.GetEntity().coordGrid.level
     local entity = ShapeList.CreateEntity(name .. "_" .. kind)
     entity:SetShapeData(shapeFor(kind, entry, sizeKey))
     if kind == "beam" then
@@ -214,39 +211,30 @@ local function makeEntity(name, kind, wantedHighlight, level, sizeKey)
     return entity
 end
 
--- Returns the NPC's live entity, which the forest keeps (forest.lua's followNpcs), or nil while it is out of view.
-local function liveNpc(highlight)
-    local entity = highlight.entry.npcEntity
-    return entity ~= nil and entity.isValid and entity or nil
-end
-
 -- Returns an NPC instance's colour. The faces take the fill's alpha from it, as an instance's colour multiplies
 -- its shape's.
 local function instanceColour(kind, colour)
     return kind == "faces" and (colour & 0xFFFFFF00) | fillAlpha() or colour
 end
 
--- Shapes an NPC's instance in its highlight's style, drawn over the world.
-local function shapeInstance(instance, highlight, kind)
+-- One instance of an NPC's highlight in its style, drawn over the world, hidden until followTracked places it.
+local function makeInstance(highlight, name, kind)
+    local instance = ShapeList.CreateInstance(name .. "_" .. kind)
     instance:SetShapeData(NPC_SHAPE_MAKERS[kind](highlight.entry))
     instance.colour = instanceColour(kind, highlight.colour)
     instance.lineWidth = LINE_WIDTH
     instance.ignoreDepth = true
-end
-
--- One instance of an NPC's highlight, hidden until followTracked places it.
-local function makeInstance(highlight, name, kind)
-    local instance = ShapeList.CreateInstance(name .. "_" .. kind)
-    shapeInstance(instance, highlight, kind)
     instance.visible = false
     return instance
 end
 
--- Runs each logic tick while an NPC is highlighted: moves its shapes to it (hidden while it is out of view),
+-- Runs each logic tick while an NPC is highlighted: moves its shapes to it, hidden while it is out of view, and
+-- turns its beam.
 local function followTracked()
     for _, highlight in pairs(tracked) do
-        local entity = liveNpc(highlight)
-        if entity == nil then
+        -- the live entity the forest keeps (forest.lua's followNpcs)
+        local entity = highlight.entry.npcEntity
+        if entity == nil or not entity.isValid then
             if highlight.atX ~= nil then
                 highlight.atX = nil
                 for _, instance in pairs(highlight.instances) do instance.visible = false end
@@ -290,7 +278,7 @@ local function destroyHighlight(name, highlight)
 end
 
 -- Makes, places and colours a location's entities.
-local function refreshEntities(name, wantedHighlight, level)
+local function refreshEntities(name, wantedHighlight)
     local entry, colour = wantedHighlight.entry, wantedHighlight.colour
     local sizeKey = sizeKeyOf(entry)
     local highlight = shown[name]
@@ -315,12 +303,12 @@ local function refreshEntities(name, wantedHighlight, level)
     end
     for kind in pairs(SHAPE_MAKERS) do
         if entities[kind] == nil and wantedHighlight[kind] then
-            entities[kind] = makeEntity(name, kind, wantedHighlight, level, sizeKey)
+            entities[kind] = makeEntity(name, kind, wantedHighlight, sizeKey)
         end
     end
 end
 
--- Makes and colours an NPC's instances;
+-- Makes and colours an NPC's instances.
 local function refreshInstances(name, wantedHighlight)
     local highlight = shown[name]
     local transparency = Settings.highlightTransparency
@@ -331,14 +319,10 @@ local function refreshInstances(name, wantedHighlight)
         track(name, highlight)
     end
     local instances = highlight.instances
-    if highlight.colour ~= wantedHighlight.colour then
-        for kind, instance in pairs(instances) do instance.colour = instanceColour(kind, wantedHighlight.colour) end
-        highlight.colour = wantedHighlight.colour
-    end
-    -- only the faces are see-through
-    if highlight.transparency ~= transparency then
-        highlight.transparency = transparency
-        if instances.faces ~= nil then instances.faces.colour = instanceColour("faces", highlight.colour) end
+    -- only the faces are see-through, by the transparency setting
+    if highlight.colour ~= wantedHighlight.colour or highlight.transparency ~= transparency then
+        highlight.colour, highlight.transparency = wantedHighlight.colour, transparency
+        for kind, instance in pairs(instances) do instance.colour = instanceColour(kind, highlight.colour) end
     end
     for kind in pairs(NPC_SHAPE_MAKERS) do
         local isWantedNow = wantedHighlight[kind]
@@ -353,18 +337,17 @@ local function refreshInstances(name, wantedHighlight)
     end
 end
 
--- Makes the world's highlights match what the settings.
+-- Makes the world's highlights match what the settings ask for.
 function Highlights.refresh(held)
     local wantedHighlights = wanted(held)
     for name, highlight in pairs(shown) do
         if wantedHighlights[name] == nil then destroyHighlight(name, highlight) end
     end
-    local level = Forest.isInside and Player.GetEntity().coordGrid.level or 0
     for name, wantedHighlight in pairs(wantedHighlights) do
         if wantedHighlight.entry.isNpc then
             refreshInstances(name, wantedHighlight)
         else
-            refreshEntities(name, wantedHighlight, level)
+            refreshEntities(name, wantedHighlight)
         end
     end
 end
@@ -592,7 +575,7 @@ local function routeKey(tiles, colour)
 end
 
 -- Draws the chosen route on the ground. A route already drawn takes the new one's shape in
--- place, its entities kept and its origin tile too, so what both routes share is drawn where it was
+-- place, its entities kept and its origin tile too, so what both routes share is drawn where it was.
 -- Only the first route is made from scratch, a few tiles a frame.
 function Highlights.showRoute(tiles, colour)
     local key = routeKey(tiles, colour)

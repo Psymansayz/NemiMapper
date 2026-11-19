@@ -44,7 +44,7 @@ local standingTurnsCache = {}
 -- most matching tiles still stands out.
 local function turnByStanding(sourceKey, standing)
     local template = TemplateStanding[sourceKey]
-    if template == nil or standing == nil then return nil end
+    if standing == nil then return nil end
     local standingTurns = standingTurnsCache[sourceKey]
     if standingTurns == nil then
         standingTurns = {}
@@ -107,9 +107,8 @@ end
 function ForestGrid.build(zones, bounds, standingByZone, previous)
     local turnsOf, settled = {}, true
     for index, zone in ipairs(zones) do
-        local sourceKey = zone.sourceX .. "_" .. zone.sourceZ
-        local turns = turnByStanding(sourceKey, standingByZone[zone.x .. "," .. zone.z])
-        if turns == nil and groundTurns(sourceKey).turnMatters then settled = false end
+        local turns = turnByStanding(zone.templateKey, standingByZone[zone.x .. "," .. zone.z])
+        if turns == nil and groundTurns(zone.templateKey).turnMatters then settled = false end
         turnsOf[index] = turns or 0
     end
     if previous ~= nil and previous.settled == settled then
@@ -124,7 +123,7 @@ function ForestGrid.build(zones, bounds, standingByZone, previous)
         settled = settled,
     }, Grid)
     for index, zone in ipairs(zones) do
-        local ground = groundTurns(zone.sourceX .. "_" .. zone.sourceZ).ground[turnsOf[index]]
+        local ground = groundTurns(zone.templateKey).ground[turnsOf[index]]
         for position = 1, #ground, 2 do
             grid.walkable[grid:index(zone.x + ground[position], zone.z + ground[position + 1])] = true
         end

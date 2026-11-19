@@ -1,4 +1,4 @@
--- Saves a text's content and color.
+-- A text that writes its content and colour only when they change.
 
 local StatusText = {}
 

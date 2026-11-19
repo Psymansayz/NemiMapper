@@ -4,6 +4,7 @@ local Settings = require("src/data/settings")
 local Forest = require("src/game/forest")
 local ForestStops = require("src/game/forest_stops")
 local ToolsHeld = require("src/game/tools_held")
+local RouteChoice = require("src/game/route_choice")
 local WorldNumber = require("src/game/world_number")
 local Highlights = require("src/game/highlights")
 local MapWindow = require("src/ui/map_window")
@@ -20,12 +21,13 @@ local LOG_PREFIX = "[nemi_mapper] "
 
 local pageView, settingsView = nil, nil
 local settingsWindow = nil
-local openSettings, forgetControls 
+local controlsOf = {} -- page or window -> setting key -> what shows the setting there (see keepControl)
+local openSettings -- defined below
 
 -- Forgets the settings window once its interface is gone.
 local function forgetClosedSettingsWindow()
     if settingsWindow ~= nil and ui.Interfaces:GetInterface(settingsWindow.interfaceID) == nil then
-        forgetControls(settingsWindow)
+        controlsOf[settingsWindow] = nil
         settingsWindow = nil
     end
 end
@@ -44,11 +46,6 @@ end
 
 local function openMap()
     openWindow(MapWindow.open)
-end
-
--- Opens the map hidden, for route guidance, which runs in the map window and needs it open.
-local function openMapHidden()
-    openWindow(MapWindow.open, true)
 end
 
 local function openScout()
@@ -70,6 +67,7 @@ local MODIFIER_BITS = { -- a modifier key's bit in a key event's modifiers
     [GameKey.SHIFT] = ModifierKey.SHIFT, [GameKey.CONTROL] = ModifierKey.CONTROL, [GameKey.ALT] = ModifierKey.ALT,
 }
 
+-- Returns whether event completes the binding keys: its key is the last, with the others held.
 local function completes(keys, event)
     local count = #keys
     if count == 0 or keys[count] ~= event.gameKey then return false end
@@ -86,7 +84,7 @@ local function onKeyDown(event)
     if event.isRepeat or PrettyUI.KeybindField.IsCapturing() then return end
     if not Keyboard.IsAvailable() or Keyboard.IsBlocked() then return end
     if not completes(openMapKeys, event) then return end
-    if MapWindow.isShown() then MapWindow.hideOrClose() else openMap() end
+    if MapWindow.isOpen() then MapWindow.close() else openMap() end
 end
 
 local function setKeybindsListening(wanted)
@@ -127,7 +125,7 @@ local function loadSettings()
 end
 loadSettings()
 
--- On entering, route guidance starts after the forest's search ends
+-- On entering, route guidance starts after the forest's search ends.
 local guidanceWaiting = false
 -- Windows open before entering the forest stay open after leaving it.
 local openBeforeEntering = { scout = false, map = false }
@@ -136,11 +134,7 @@ Forest.onEntered = function()
     FullForestAlert.reset()
     openBeforeEntering.scout, openBeforeEntering.map = ScoutWindow.isOpen(), MapWindow.isOpen()
     if Settings.scoutOpensInForest then openScout() end
-    if Settings.mapOpensInForest then
-        openMap()
-    elseif Settings.routeStartsInForest then
-        openMapHidden()
-    end
+    if Settings.mapOpensInForest then openMap() end
     guidanceWaiting = Settings.routeStartsInForest
 end
 
@@ -148,7 +142,8 @@ Forest.onLeft = function()
     guidanceWaiting = false
     FullForestAlert.stop()
     if not openBeforeEntering.scout then ScoutWindow.close() end
-    if not openBeforeEntering.map or not MapWindow.isShown() then MapWindow.close() end
+    if not openBeforeEntering.map then MapWindow.close() end
+    RouteChoice.forget()
     ScoutWindow.showForest() -- the windows kept open, after those closing have saved their size as it was
     MapWindow.showForestLeft()
     Highlights.clear()
@@ -158,32 +153,39 @@ end
 Forest.onChanged = function()
     WorldNumber.read()
     ScoutWindow.showForest()
+    RouteChoice.showForest()
     MapWindow.showForest()
     Highlights.refresh()
     FullForestAlert.check()
     if guidanceWaiting and not Forest.isSearching then
         guidanceWaiting = false
-        MapWindow.startMapping()
+        RouteChoice.startMapping()
+        MapWindow.showRoutes()
     end
 end
 Forest.onMoved = function()
+    RouteChoice.showPlayer()
     MapWindow.showPlayer()
     Highlights.followPlayer()
 end
 Forest.onMonstersChanged = ScoutWindow.showMonsters
-Forest.onNpcMoved = MapWindow.showNpcMoved
+Forest.onNpcMoved = function(entry)
+    RouteChoice.showNpcMoved(entry)
+    MapWindow.showNpcMoved(entry)
+end
 
 Forest.onInventoryChanged = function()
-    ToolsHeld.update(Forest.playerTile)
+    ToolsHeld.update()
+    RouteChoice.showInventory()
     MapWindow.showInventory()
     Highlights.followPlayer()
 end
 
 Forest.start()
 
--- The plugin's two hub pages. The ribbon page and the settings page.
+-- The plugin's two hub pages: the ribbon page and the settings page.
 local SECTION_COLOUR = Colours.GOLD
-local SECTION_FONT = require("src/game/game_ids").resolve("Font", "CINZEL_18PT_BOLD") or id.Font.CINZEL_13PT_BOLD
+local SECTION_FONT = id.Font.CINZEL_18PT_BOLD
 local SECTION_HEIGHT = 30 -- room for the 18pt heading
 local PARAGRAPH_GAP = 18 -- a blank line between the settings' how-to paragraphs
 local INDENT = 30 -- per level of sub-setting
@@ -195,9 +197,16 @@ local SLIDER_LEAST_WIDTH = 160 -- narrower sliders are hard to set precisely
 local ROW_GAP = 2 -- PrettyUI's default gap of 8 spreads the settings too far apart
 
 -- What each setting's change refreshes; a row's onChange is called with nothing.
-local mapChanged, headerChanged, routesChanged = MapWindow.showSettings, MapWindow.showHeaderText, MapWindow.showRoutes
+local mapChanged, headerChanged = MapWindow.showSettings, MapWindow.showHeaderText
 local highlightsChanged, scoutChanged = Highlights.refresh, ScoutWindow.showSettings
+local function routesChanged()
+    RouteChoice.update()
+    MapWindow.showRoutes()
+end
 local function sharingChanged()
+    -- A shared map shows the final route.
+    -- A chosen route would replace it, and NAVIGATE's or SOLVE's would have no button left to turn it off.
+    if Settings.mapSharingMode and RouteChoice.isChosen() then RouteChoice.choose(nil, false, false) end
     MapWindow.showSettings()
     ScoutWindow.showSettings()
 end
@@ -297,8 +306,6 @@ for _, row in ipairs(settingRows) do
     if row.key ~= nil then rowOf[row.key] = row end
     row.depth = row.under ~= nil and rowOf[row.under].depth + 1 or 0
 end
-
-local controlsOf = {} -- page or window -> setting key -> what shows the setting there (see keepControl)
 
 -- Shows a setting's value on every page that has it, after a change elsewhere (another page, the map's sharing
 -- button or a restore).
@@ -466,14 +473,9 @@ local function newView(pluginLayer, layout)
     })
 end
 
--- Forgets the controls of a page or window that is gone; other pages keep theirs.
-forgetControls = function(view)
-    controlsOf[view] = nil
-end
-
 local function closeView(view)
     if view ~= nil then
-        forgetControls(view)
+        controlsOf[view] = nil
         pcall(function() view:Destroy() end)
     end
     return nil
@@ -581,21 +583,15 @@ local function resetSettings()
         if row.key ~= nil then showSetting(row.key) end
     end
     showEnabledStates()
-    MapWindow.showSettings()
-    ScoutWindow.showSettings()
-    Highlights.refresh()
+    sharingChanged()
+    routesChanged()
+    highlightsChanged()
 end
 
 local RESTORE_TEXT = "Restore the default settings"
-local BUTTON_EXTRA_WIDTH = 16 
+local BUTTON_EXTRA_WIDTH = 16
 
-local function addRestoreButton(view)
-    local width = PrettyUI.SimpleButton.getSize(RESTORE_TEXT) + BUTTON_EXTRA_WIDTH
-    view:AddSimpleButton(RESTORE_TEXT, resetSettings,
-        { x = -math.floor(width / 2), xAnchor = 0.5, width = width, marginTop = 16 })
-end
-
--- Adds every setting to the hub's settings page or the settings window
+-- Adds every setting to the hub's settings page or the settings window.
 local function addAllSettings(view)
     view:AddText("In a Nemi Forest, the scout window quickly identifies the nodes present in the forest and the map "
         .. "shows the nodes, keys and doors. Click anything on the map or in its legends to be guided to it.")
@@ -610,7 +606,9 @@ local function addAllSettings(view)
             addSetting(view, row)
         end
     end
-    addRestoreButton(view)
+    local restoreWidth = PrettyUI.SimpleButton.getSize(RESTORE_TEXT) + BUTTON_EXTRA_WIDTH
+    view:AddSimpleButton(RESTORE_TEXT, resetSettings,
+        { x = -math.floor(restoreWidth / 2), xAnchor = 0.5, width = restoreWidth, marginTop = 16 })
 end
 
 local function buildSettingsPage(pluginLayer)
@@ -634,20 +632,16 @@ local function layOutSliders()
     sliderLayoutFramesLeft = sliderLayoutFramesLeft - 1
     if sliderLayoutFramesLeft <= 0 then Event.Draw.Unsubscribe(SLIDER_LAYOUT_SUBSCRIPTION) end
     if not isSettingsWindowOpen() then return stopLayingOutSliders() end
-    for _, kept in pairs(controlsOf[settingsWindow] or {}) do
+    for _, kept in pairs(controlsOf[settingsWindow]) do
         if kept.relayout ~= nil then kept.relayout() end
     end
-end
-local function layOutSlidersSoon()
-    if sliderLayoutFramesLeft <= 0 then Event.Draw.Subscribe(SLIDER_LAYOUT_SUBSCRIPTION, layOutSliders) end
-    sliderLayoutFramesLeft = SLIDER_LAYOUT_FRAMES
 end
 
 -- Saves the window's position and size and forgets its controls, however it closes.
 local function releaseSettingsWindow()
     stopLayingOutSliders()
     WindowPlace.remember(settingsWindow.root, "settings")
-    forgetControls(settingsWindow)
+    controlsOf[settingsWindow] = nil
     settingsWindow = nil
 end
 
@@ -674,10 +668,8 @@ openSettings = function()
     if isSettingsWindowOpen() then return settingsWindow:Show() end
     openWindow(function(_, pluginLayer)
         local minimumWidth = settingsWidthNeeded()
-        local width = math.max(minimumWidth, Settings.settingsWidth or SETTINGS_WINDOW_WIDTH)
-        width = math.min(width, pluginLayer.width)
-        local height = math.min(Settings.settingsHeight or SETTINGS_WINDOW_HEIGHT, pluginLayer.height)
-        local x, y = WindowPlace.position(pluginLayer, width, height, Settings.settingsX, Settings.settingsY)
+        local x, y, width, height = WindowPlace.restore(pluginLayer, "settings", SETTINGS_WINDOW_WIDTH,
+            SETTINGS_WINDOW_HEIGHT, minimumWidth)
         settingsWindow = PrettyUI.Window.new(pluginLayer, {
             title = "Nemi Mapper settings", x = x, y = y, width = width, height = height, scrollable = true,
             resizable = true, minWidth = minimumWidth, minHeight = SETTINGS_WINDOW_MINIMUM_HEIGHT,
@@ -688,7 +680,8 @@ openSettings = function()
         local setWindowSize = settingsWindow.SetSize
         settingsWindow.SetSize = function(resizedWindow, newWidth, newHeight)
             setWindowSize(resizedWindow, newWidth, newHeight)
-            layOutSlidersSoon()
+            if sliderLayoutFramesLeft <= 0 then Event.Draw.Subscribe(SLIDER_LAYOUT_SUBSCRIPTION, layOutSliders) end
+            sliderLayoutFramesLeft = SLIDER_LAYOUT_FRAMES
         end
     end)
 end
@@ -717,8 +710,7 @@ end)
 
 -- Stops what runs only in the game, on leaving it and at shutdown.
 local function stopInGame()
-    Forest.stop()
-    FullForestAlert.stop()
+    Forest.stop() -- leaving a forest stops its alert
     Highlights.clear()
     setKeybindsListening(false)
 end

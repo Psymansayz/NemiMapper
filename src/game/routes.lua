@@ -1,5 +1,6 @@
--- Routes over the forest's walkable tiles: the final route from the entrance past every node to the exit, and
--- the route from the player to the nearest of some targets (a node, task, key, door or opening).
+-- Routes over the forest's walkable tiles: the final route from the entrance past every node to the exit, the
+-- route from the player to the nearest of some targets (a node, task, key, door or opening), and the route toward
+-- the forest's centre.
 
 local Routes = {}
 
@@ -13,7 +14,7 @@ local ORTHOGONAL_STEPS = 4 -- the first four
 -- They are cached on the grid on first use, as a grid's walkable tiles never change and working out steps in every
 -- search would take most of its time.
 -- Unwalkable tiles have steps too, as a search may start on a target's own tiles.
-local function stepsFrom(grid, steps, index)
+local function stepsFrom(grid, index)
     local x, z = grid:tile(index)
     local list = {}
     for position, step in ipairs(STEPS) do
@@ -25,7 +26,7 @@ local function stepsFrom(grid, steps, index)
             list[#list + 1], list[#list + 2], list[#list + 3] = nextIndex, sideX, sideZ
         end
     end
-    steps[index] = list
+    grid.steps[index] = list
     return list
 end
 
@@ -50,7 +51,7 @@ local function search(grid, startTiles, blocked, distancesOnly)
     while first <= last do
         local index = queue[first]
         first = first + 1
-        local list, nextDistance = steps[index] or stepsFrom(grid, steps, index), distance[index] + 1
+        local list, nextDistance = steps[index] or stepsFrom(grid, index), distance[index] + 1
         for position = 1, #list, 3 do
             local nextIndex, sideA = list[position], list[position + 1]
             if not blocked[nextIndex] and (sideA == 0 or not (blocked[sideA] or blocked[list[position + 2]])) then
@@ -72,7 +73,7 @@ end
 -- A search never reaches a blocked tile, so the nearest of these is never one.
 local function tilesRound(grid, target)
     local footprint, onTarget = target.tiles or { target }, {}
-    for _, tile in ipairs(footprint) do onTarget[grid:index(tile.x, tile.z) or 0] = true end
+    for _, tile in ipairs(footprint) do onTarget[grid:index(tile.x, tile.z)] = true end
     local tiles = {}
     for _, tile in ipairs(footprint) do
         for position = 1, ORTHOGONAL_STEPS do
@@ -164,20 +165,20 @@ end
 -- For the solving plan (src/game/solve_plan.lua), which searches from many places.
 Routes.search, Routes.tilesRound, Routes.nearest = search, tilesRound, nearest
 
--- Returns the route from the start of <found> to the nearest of targetTiles.
-function Routes.routeFrom(found, grid, targetTiles)
+-- Returns the route from the start of found (a search) to the nearest of targetTiles.
+function Routes.routeFrom(found, targetTiles)
     local tiles = {}
     for _, target in ipairs(targetTiles) do
-        for _, tile in ipairs(tilesRound(grid, target)) do tiles[#tiles + 1] = tile end
+        for _, tile in ipairs(tilesRound(found.grid, target)) do tiles[#tiles + 1] = tile end
     end
     local best, bestDistance = nearest(found, tiles)
     if best == nil then return nil end
     return straightPieces(wayBack(found, best.index)), bestDistance
 end
 
--- Returns the route from <from> to the nearest of targetTiles, avoiding <blocked>.
+-- Returns the route from from to the nearest of targetTiles, avoiding blocked.
 function Routes.routeTo(grid, from, targetTiles, blocked)
-    return Routes.routeFrom(search(grid, { from }, blocked), grid, targetTiles)
+    return Routes.routeFrom(search(grid, { from }, blocked), targetTiles)
 end
 
 -- Returns the route to the reachable tile nearest the centre of the forest.

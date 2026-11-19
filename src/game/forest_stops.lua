@@ -61,7 +61,6 @@ function ForestStops.openingOn(side)
             return opening
         end
     end
-    return nil
 end
 
 -- Returns the barriers' tiles, which routes to a tool or barrier do not cross.
@@ -69,14 +68,13 @@ function ForestStops.barrierTiles()
     local blocked = {}
     for _, barrier in ipairs(ForestStops.tilesOfKind("barrier")) do
         for _, tile in ipairs(barrier.tiles) do
-            local index = Forest.grid:index(tile.x, tile.z)
-            if index ~= nil then blocked[index] = true end
+            blocked[Forest.grid:index(tile.x, tile.z)] = true
         end
     end
     return blocked
 end
 
--- Returns the feature a route ends at
+-- Returns the feature a route ends at.
 function ForestStops.entryAtEnd(route, kind, key)
     local last = route[#route]
     local best, bestDistance = nil, nil
@@ -100,25 +98,26 @@ function ForestStops.sameSet(first, second)
     return true
 end
 
--- Returns whether a key or door is still needed
+-- Returns whether a key or door is still needed.
 function ForestStops.isPuzzleLeft(entry, held)
     local feature = entry.feature
     return isUnsolved(feature) and not (feature.kind == "source" and held[feature.key])
 end
 
--- Returns a found feature as a plan stop, with its tiles and the colour of the route to it.
-function ForestStops.stopOf(kind, entry, colour)
+-- Returns a found feature as a plan stop, with its tiles and the colour of the route to it. A barrier is a door
+-- stop, anything else a key stop (visited without a key first).
+function ForestStops.stopOf(entry)
     local stop = tilesOfEntry(entry)
-    stop.kind, stop.colour, stop.entry = kind, colour, entry
+    stop.kind = entry.feature.kind == "barrier" and "door" or "key"
+    stop.colour, stop.entry = ForestFeatures.colourOf(entry.feature), entry
     return stop
 end
 
+-- Returns the stop in stops at entry, if it waits for no key first.
 function ForestStops.keptStop(stops, entry)
-    if entry == nil then return nil end
     for _, stop in ipairs(stops) do
         if stop.entry == entry and stop.needs == nil then return stop end
     end
-    return nil
 end
 
 function ForestStops.isWorkLeft(feature)
@@ -132,7 +131,7 @@ function ForestStops.mapStops()
     local stops = {}
     for _, entry in ipairs(Forest.found) do
         if isMapStop(entry) then
-            stops[#stops + 1] = ForestStops.stopOf("key", entry, ForestFeatures.colourOf(entry.feature))
+            stops[#stops + 1] = ForestStops.stopOf(entry)
         end
     end
     return stops
@@ -152,8 +151,8 @@ function ForestStops.solveStops(held)
         if not Forest.doorsGone[toolPair.barrier.key] then
             local keyEntry, doorEntry = firstOf[toolPair.source], firstOf[toolPair.barrier]
             local keyStop = keyEntry and not held[toolPair.source.key] and not Forest.keysTaken[toolPair.source.key]
-                and ForestStops.stopOf("key", keyEntry, toolPair.colour) or nil
-            local doorStop = doorEntry and ForestStops.stopOf("door", doorEntry, toolPair.colour) or nil
+                and ForestStops.stopOf(keyEntry) or nil
+            local doorStop = doorEntry and ForestStops.stopOf(doorEntry) or nil
             if keyStop ~= nil then stops[#stops + 1] = keyStop end
             if doorStop ~= nil and (keyStop ~= nil or held[toolPair.source.key]) then
                 doorStop.needs = keyStop
@@ -171,7 +170,7 @@ function ForestStops.takenKeyStops()
     for _, entry in ipairs(Forest.found) do
         local feature = entry.feature
         if feature.kind == "source" and Forest.keysTaken[feature.key] and isUnsolved(feature) then
-            stops[#stops + 1] = ForestStops.stopOf("key", entry, feature.pair.colour)
+            stops[#stops + 1] = ForestStops.stopOf(entry)
         end
     end
     return stops
@@ -182,7 +181,7 @@ function ForestStops.tilesNotInPlan(stops, blocked)
     local inPlan = {}
     for _, stop in ipairs(stops) do
         if stop.kind == "door" then
-            for _, tile in ipairs(stop.tiles) do inPlan[Forest.grid:index(tile.x, tile.z) or -1] = true end
+            for _, tile in ipairs(stop.tiles) do inPlan[Forest.grid:index(tile.x, tile.z)] = true end
         end
     end
     local left = {}
@@ -198,7 +197,7 @@ end
 function ForestStops.stopsToward(targets, player, held)
     local stops, mustVisit, isStop, isTarget = {}, {}, {}, {}
     local puzzleStops = ForestStops.solveStops(held)
-    for _, target in ipairs(targets) do isTarget[target.entry] = target end
+    for _, target in ipairs(targets) do isTarget[target.entry] = true end
     for _, stop in ipairs(puzzleStops) do isStop[stop.entry] = true end
     for _, target in ipairs(targets) do
         if not isStop[target.entry] then
@@ -213,7 +212,7 @@ function ForestStops.stopsToward(targets, player, held)
     local keylessDoors = {}
     for _, entry in ipairs(Forest.found) do
         if entry.feature.kind == "barrier" and not isStop[entry] then
-            keylessDoors[#keylessDoors + 1] = ForestStops.stopOf("door", entry, entry.feature.pair.colour)
+            keylessDoors[#keylessDoors + 1] = ForestStops.stopOf(entry)
         end
     end
     local needed, keylessNeeded = SolvePlan.neededStops(Forest.grid, player, stops, mustVisit, keylessDoors)
@@ -223,16 +222,6 @@ function ForestStops.stopsToward(targets, player, held)
         if Forest.keysTaken[sourceKey] then takenNeeded[sourceKey] = true else unseen[#unseen + 1] = door end
     end
     return needed, unseen, takenNeeded, puzzleStops
-end
-
--- Returns the entries of puzzleStops that mappingStops does not require.
-local function unneededAmong(mappingStops, puzzleStops)
-    local required, unneeded = {}, {}
-    for _, stop in ipairs(mappingStops) do required[stop.entry] = true end
-    for _, stop in ipairs(puzzleStops) do
-        if not required[stop.entry] then unneeded[stop.entry] = true end
-    end
-    return unneeded
 end
 
 -- Returns what NAVIGATE's stops depend on, as a string: the unclaimed nodes, active tasks and unfinished puzzles
@@ -261,9 +250,16 @@ local function keptPlan(held)
     local signature = planSignature(held)
     if kept.signature ~= signature or kept.grid ~= Forest.grid then
         kept.signature, kept.grid = signature, Forest.grid
-        kept.stops, kept.keylessNeeded, kept.takenNeeded, kept.puzzleStops =
+        local puzzleStops
+        kept.stops, kept.keylessNeeded, kept.takenNeeded, puzzleStops =
             ForestStops.stopsToward(ForestStops.mapStops(), player, held)
-        kept.unneeded = nil
+        -- the puzzle entries the tour does not need
+        local required = {}
+        for _, stop in ipairs(kept.stops) do required[stop.entry] = true end
+        kept.unneeded = {}
+        for _, stop in ipairs(puzzleStops) do
+            if not required[stop.entry] then kept.unneeded[stop.entry] = true end
+        end
     end
     return kept
 end
@@ -285,9 +281,7 @@ end
 -- Returns the puzzle entries no route to an unclaimed node needs.
 function ForestStops.unneededNow(held)
     local plan = keptPlan(held)
-    if plan == nil then return NONE end
-    if plan.unneeded == nil then plan.unneeded = unneededAmong(plan.stops, plan.puzzleStops) end
-    return plan.unneeded
+    return plan and plan.unneeded or NONE
 end
 
 return ForestStops

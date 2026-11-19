@@ -119,8 +119,7 @@ function SolvePlan.nextStop(grid, player, stops, alwaysBlocked)
         joinedByMask[visitedMask] = walking
         return walking
     end
-    local allVisited = 0
-    for index in ipairs(stops) do allVisited = allVisited | (1 << index) end
+    local allVisited = (1 << (stopCount + 1)) - 2 -- bits 1 to stopCount
     -- The cheapest way to visit the rest from a stop, cached by the stop and the stops visited, and the stop to go
     -- to next.
     -- A stop left unvisited costs MISSED, so a tour takes every stop some order can reach before it counts tiles.
@@ -153,7 +152,7 @@ function SolvePlan.nextStop(grid, player, stops, alwaysBlocked)
         remembered[key] = best
         return best, bestFirst
     end
-    -- the first call is never remembered, so it gives the stop to go to first
+    -- no other call starts at the player (0), so this one is never found remembered and gives the first stop
     local _, first = cheapest(0, 0)
     return first and stops[first], playerSearch
 end
