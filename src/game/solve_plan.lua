@@ -5,6 +5,7 @@ local Routes = require("src/game/routes")
 local SolvePlan = {}
 
 local INFINITE = math.huge
+local MISSED = 1000000 -- a stop no order reaches costs more than any tour's tiles
 local NONE = {}
 
 -- Returns tiles as a set of grid indexes.
@@ -58,9 +59,9 @@ local function distancesFromStop(grid, stop, stops, doorsKey, blockedFor)
 end
 
 -- Returns the stop to go to first; stops as SolvePlan.nextStop takes them.
-local function plan(grid, player, stops, alwaysBlocked, playerSearch)
+local function plan(grid, player, stops, alwaysBlocked)
     local stopCount = #stops
-    if stopCount == 0 then return nil, playerSearch end
+    if stopCount == 0 then return nil end
     local indexOf = {}
     for index, stop in ipairs(stops) do indexOf[stop] = index end
     -- Every barrier blocks the way except the one a search starts from.
@@ -86,7 +87,7 @@ local function plan(grid, player, stops, alwaysBlocked, playerSearch)
     for index in pairs(allShut) do shutIndexes[#shutIndexes + 1] = index end
     table.sort(shutIndexes)
     local doorsKey = table.concat(shutIndexes, " ")
-    if playerSearch == nil then playerSearch = Routes.search(grid, { player }, allShut) end
+    local playerSearch = Routes.search(grid, { player }, allShut)
     local base = { [0] = distancesFrom(grid, playerSearch, stops, allShut) }
     for index, stop in ipairs(stops) do base[index] = distancesFromStop(grid, stop, stops, doorsKey, blockedBut) end
     -- Distances with the doors visited so far open
@@ -118,46 +119,10 @@ local function plan(grid, player, stops, alwaysBlocked, playerSearch)
     end
     local allVisited = 0
     for index in ipairs(stops) do allVisited = allVisited | (1 << index) end
-    -- Find the stops some order can reach, taking them in any possible order until no more can be.
-    -- The rest, out of reach or behind a door whose key is behind that door, are left out with whatever needs them.
-    local doable, doableMask, taken = {}, 0, true
-    while taken do
-        taken = false
-        local reach = joined(doableMask)[0]
-        for index, stop in ipairs(stops) do
-            if not doable[stop] and reach[index] < INFINITE and (stop.needs == nil or doable[stop.needs]) then
-                doable[stop], doableMask, taken = true, doableMask | (1 << index), true
-            end
-        end
-    end
-    if doableMask ~= allVisited then
-        -- a barrier left out stays shut, so its tiles are blocked
-        local left, stillBlocked = {}, {}
-        for index in pairs(alwaysBlocked) do stillBlocked[index] = true end
-        for _, stop in ipairs(stops) do
-            if doable[stop] then
-                left[#left + 1] = stop
-            elseif stop.kind == "door" then
-                for index in pairs(doorIndexes[stop]) do stillBlocked[index] = true end
-            end
-        end
-        return plan(grid, player, left, stillBlocked, playerSearch)
-    end
-    -- The order stops are tried in, which breaks ties: keys first, as picking one up early costs nothing and
-    -- opens the way, then the rest.
-    local isKey = {}
-    for _, stop in ipairs(stops) do
-        if stop.needs ~= nil then isKey[stop.needs] = true end
-    end
-    local tried = {}
-    for index, stop in ipairs(stops) do
-        if isKey[stop] then tried[#tried + 1] = index end
-    end
-    for index, stop in ipairs(stops) do
-        if not isKey[stop] then tried[#tried + 1] = index end
-    end
     -- The cheapest way to visit the rest from a stop, cached by the stop and the stops visited, and the tour's
     -- first stop.
+    -- A stop left unvisited costs MISSED, so a tour takes every stop some order can reach before it counts tiles.
+    -- The rest, out of reach or behind a door whose key is behind that door, are left out.
     local remembered, firstStop = {}, nil
     local function cheapest(at, visitedMask)
         if visitedMask == allVisited then return 0 end
@@ -165,25 +130,30 @@ local function plan(grid, player, stops, alwaysBlocked, playerSearch)
         if remembered[key] ~= nil then return remembered[key] end
         local best, bestFirst = INFINITE, nil
         local walking = joined(visitedMask)[at]
-        for _, following in ipairs(tried) do
+        for following = 1, stopCount do
             local stop = stops[following]
             local unvisited = visitedMask & (1 << following) == 0
             local keyHeld = stop.needs == nil or visitedMask & (1 << indexOf[stop.needs]) ~= 0
             if unvisited and keyHeld and walking[following] < INFINITE then
                 local cost = walking[following] + cheapest(following, visitedMask | (1 << following))
                 -- A tie goes to the nearer next stop, so a key on the way is picked up, not passed.
-                -- An incomplete tour (INFINITE) does not tie with having no candidate yet.
-                if cost < best or (cost == best and bestFirst ~= nil and walking[following] < walking[bestFirst]) then
+                if cost < best or (cost == best and walking[following] < walking[bestFirst]) then
                     best, bestFirst = cost, following
                 end
+            end
+        end
+        if best == INFINITE then
+            best = 0
+            for index = 1, stopCount do
+                if visitedMask & (1 << index) == 0 then best = best + MISSED end
             end
         end
         remembered[key] = best
         if key == 0 then firstStop = bestFirst end
         return best
     end
-    if cheapest(0, 0) == INFINITE then return nil, playerSearch end
-    return stops[firstStop], playerSearch
+    cheapest(0, 0)
+    return firstStop and stops[firstStop], playerSearch
 end
 
 -- Returns the stops a tour of the mustVisit stops needs.
