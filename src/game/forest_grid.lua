@@ -20,38 +20,53 @@ function ForestGrid.hasStanding(sourceKey)
     return TemplateStanding[sourceKey] ~= nil
 end
 
--- Returns values, a zone's 64 per-tile values (standing heights or ground flags, tile x, z at z * 8 + x + 1), turned
--- clockwise quarterTurns times: (x, z) -> (z, 7 - x).
-local function turnedTiles(values, quarterTurns)
-    for _ = 1, quarterTurns do
-        local turnedValues = {}
-        for z = 0, ZONE_SIZE - 1 do
-            for x = 0, ZONE_SIZE - 1 do
-                turnedValues[(ZONE_SIZE - 1 - x) * ZONE_SIZE + z + 1] = values[z * ZONE_SIZE + x + 1]
-            end
+-- Where each of a zone's tiles goes when the zone is turned: turnedIndex[quarterTurns][index] is the index of the
+-- tile at index (tile x, z at z * 8 + x + 1) once turned clockwise quarterTurns times, (x, z) -> (z, 7 - x) each.
+local turnedIndex = {}
+for quarterTurns = 0, 3 do
+    local indexes = {}
+    for z = 0, ZONE_SIZE - 1 do
+        for x = 0, ZONE_SIZE - 1 do
+            local turnedX, turnedZ = x, z
+            for _ = 1, quarterTurns do turnedX, turnedZ = turnedZ, ZONE_SIZE - 1 - turnedX end
+            indexes[z * ZONE_SIZE + x + 1] = turnedZ * ZONE_SIZE + turnedX + 1
         end
-        values = turnedValues
     end
-    return values
+    turnedIndex[quarterTurns] = indexes
 end
+
+-- Returns values, a zone's 64 per-tile values (indexed as turnedIndex), turned clockwise quarterTurns times.
+local function turnedTiles(values, quarterTurns)
+    local turnedValues = {}
+    for index, turned in ipairs(turnedIndex[quarterTurns]) do turnedValues[turned] = values[index] end
+    return turnedValues
+end
+
+-- A zone's heights never change once read, so its turns are worked out once: its heights -> its turns, or false
+-- when none.
+local turnsOfStanding = {}
 
 -- Returns the clockwise quarter turns that best match the template zone sourceKey's standing heights to
 -- standing; none when two turns match equally well.
 -- The forest replaces a few tiles (nodes, barriers) and a zone read from afar lacks small plants, but the turn with the
 -- most matching tiles still stands out.
 local function turnByStanding(sourceKey, standing)
-    local template = TemplateStanding[sourceKey]
     if standing == nil then return nil end
+    local known = turnsOfStanding[standing]
+    if known ~= nil then return known or nil end
+    local template = TemplateStanding[sourceKey]
     local bestTurns, bestAlike, tied = nil, -1, false
     for quarterTurns = 0, 3 do
-        local turnedStanding, alike = turnedTiles(template, quarterTurns), 0
-        for tileIndex = 1, ZONE_TILES do
-            if turnedStanding[tileIndex] == standing[tileIndex] then alike = alike + 1 end
+        local alike = 0
+        for index, turned in ipairs(turnedIndex[quarterTurns]) do
+            if template[index] == standing[turned] then alike = alike + 1 end
         end
         if alike > bestAlike then bestTurns, bestAlike, tied = quarterTurns, alike, false
         elseif alike == bestAlike then tied = true end
     end
-    return not tied and bestTurns or nil
+    local turns = not tied and bestTurns or nil
+    turnsOfStanding[standing] = turns or false
+    return turns
 end
 
 -- Returns the template zone sourceKey's ground flags, indexed as in turnedTiles, from the data's text rows.
@@ -134,10 +149,10 @@ function Grid:tile(index)
     return self.minX + offset % self.width, self.minZ + offset // self.width
 end
 
--- Drops the template zones' turned tiles and standing heights on leaving a forest.
+-- Drops the template zones' turned tiles and the zones' turns on leaving a forest.
 -- The next grid makes them again from the data, which is why the walkability rows are kept.
 function ForestGrid.forgetTemplates()
-    groundTurnsCache = {}
+    groundTurnsCache, turnsOfStanding = {}, {}
 end
 
 return ForestGrid

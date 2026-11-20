@@ -188,7 +188,8 @@ announced at a known tile updates its entry in place.
 
 **Claims and tasks.** Each node's claim is a VarBit of one base variable; a `VarTransmit` of that base re-reads the
 claims and republishes. The current Trinks' task is `RAID1_GOEBIE_CURRENT_QUEST`, mapped to tasks through the game's
-enum; a task's target counts as done by its `doneVar` or by holding its `doneItem`. `Forest.itemsHeld()` reads the
+enum; a task's target counts as done by its `doneVar` or by holding its `doneItem`. The task can change only at
+Trinks, outside the forest, so inside it only the `doneVar`s' base variables republish (the Traitor killed). `Forest.itemsHeld()` reads the
 backpack and worn items. Inside the forest the result is kept until an `InventoryUpdated` for one of those
 inventories; outside it is read on each call.
 
@@ -201,7 +202,9 @@ on leaving.
 settled }` with `grid:index(x, z)` and `grid:tile(index)`. For each zone it finds the quarter turn whose template
 heights (`template_standing`) best match the heights read from the client, then marks that zone's template
 walkable tiles (`zone_walkability`), turned the same way. A zone whose turn matters but cannot be told yet makes the
-grid unsettled. Turned templates are cached and dropped on leaving. A build whose turns match the last grid's returns that grid.
+grid unsettled. The heights are compared through a table of where each tile goes per turn (`turnedIndex`), with no
+turned copies, and each zone's turn is kept by its heights, which never change once read; the turned walkable tiles
+are cached by template. Both are dropped on leaving. A build whose turns match the last grid's returns that grid.
 
 Searches cache data on the grid itself (`grid.steps`, `grid.stopDistances`), which is why a build matching the last
 grid returns it. Heights read on a step reach the grid on the next server tick.
@@ -263,9 +266,14 @@ Flow:
    and the legends' counts, then `paintRoutes`.
 3. `paintRoutes` draws the chosen route from the player on, or with nothing chosen the final route, worked out once
    per entry on the server tick after the search ends. `showRoute` adds the legend's pressed buttons and outlines and
-   the icons shown only as the route's stops.
-4. `showPlayer` (each step) moves the player marker; the route is drawn again by `showRoutes`.
+   the icons shown only as the route's stops. A canvas can only be cleared whole, so the piece the player walks
+   along has a canvas of its own (`routeStart`), and the rest (`routes`) is drawn again only when it changes: a
+   corner passed, another route, or the map's size (`restPainted`). The final route is drawn once that way too.
+4. `showPlayer` (each step) moves the player marker; the route is drawn again by `showRoutes`. A moved NPC moves only
+   its own marker (`markerOf`).
 5. Window resizes go through an override of the window's `SetSize`, which lays the frame out for the new size.
+6. While the map is hidden by its X (a legend's own window shown), its zones, routes, markers and player wait
+   (`mapHidden`, `mapStale`) and are placed when it shows again; the legends keep up.
 
 Every component property is written only when its value changes (`setBox`, `setHidden`, `showLabel`). On close
 the window's own `Destroy` takes its components. The sharing button is a child of the window's title drag layer, so

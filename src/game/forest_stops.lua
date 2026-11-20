@@ -150,6 +150,23 @@ function ForestStops.solveStops(held)
     return stops
 end
 
+-- Returns the stops of the doors whose key is neither seen nor held, which SOLVE walks toward the forest's centre to
+-- find when nothing else is left to reach.
+function ForestStops.unseenKeyDoors(held)
+    local doors = {}
+    for _, toolPair in ipairs(Forest.keysUnseen()) do
+        if not held[toolPair.source.key] then
+            for _, entry in ipairs(Forest.found) do
+                if entry.feature == toolPair.barrier then
+                    doors[#doors + 1] = ForestStops.stopOf(entry)
+                    break
+                end
+            end
+        end
+    end
+    return doors
+end
+
 -- Returns the stops of the keys following another player.
 -- A plan goes to one only when nothing else it could reach is left.
 function ForestStops.takenKeyStops()
