@@ -157,7 +157,7 @@ local function boxWanted(entry, held, unneeded)
     local feature = entry.feature
     -- a key held or a puzzle solved is never highlighted, even as the route's target
     if feature.isPuzzle and not ForestStops.isPuzzleLeft(entry, held) then return false end
-    if (routeStops[entry] or beamTarget == entry) and Settings.highlightTarget then return true end
+    if routeStops[entry] and Settings.highlightTarget then return true end
     if feature.kind == "node" then
         return Settings.highlightNodes and (not entry.isUsed or Settings.highlightUsedNodes)
     end
@@ -172,7 +172,7 @@ local function wanted()
     if not Forest.isInside or Forest.playerTile == nil then return wantedHighlights end
     local held, unneeded = ToolsHeld.held, NONE
     if Settings.highlightInWorld and Settings.highlightPuzzles and not Settings.highlightUnneededPuzzles then
-        unneeded = ForestStops.unneededNow(held)
+        unneeded = ForestStops.mappingPlan(held).unneeded
     end
     for _, entry in ipairs(Forest.found) do
         local box, beam = boxWanted(entry, held, unneeded), not Settings.hideTargetBeam and beamTarget == entry
@@ -217,7 +217,7 @@ local function instanceColour(kind, colour)
     return kind == "faces" and (colour & 0xFFFFFF00) | fillAlpha() or colour
 end
 
--- One instance of an NPC's highlight in its style, drawn over the world, hidden until followTracked places it.
+-- Makes one instance of an NPC's highlight in its style, drawn over the world, hidden until followTracked places it.
 local function makeInstance(highlight, name, kind)
     local instance = ShapeList.CreateInstance(name .. "_" .. kind)
     instance:SetShapeData(NPC_SHAPE_MAKERS[kind](highlight.entry))
@@ -352,7 +352,8 @@ function Highlights.refresh()
     end
 end
 
-function Highlights.beamOn(entry, stops)
+-- Shows the chosen route's target (entry, with the beam) and its stops (entry -> true, boxed by their setting).
+function Highlights.showTarget(entry, stops)
     if beamTarget == entry and ForestStops.sameSet(routeStops, stops) then return end
     beamTarget, routeStops = entry, stops
     Highlights.refresh()
@@ -367,7 +368,7 @@ local segmentEntity = nil -- the straight run the player is on, while a corner l
 local routeColour = nil
 local routeBuild = nil -- { edges, ribbon, drawn } while the route is being drawn
 
--- The ribbon's edges at each point (tile middles, in fine units): { left, right }.
+-- Returns the ribbon's edges at each of points (tile middles, in fine units): { left, right }.
 local function ribbonEdges(points)
     local count, pointX, pointZ = #points, {}, {}
     for index, point in ipairs(points) do pointX[index], pointZ[index] = point.x, point.z end
@@ -448,8 +449,8 @@ end
 local function stepsBetween(from, to) return math.max(math.abs(to.x - from.x), math.abs(to.z - from.z)) end
 
 local routeOrigin = nil -- the tile the route entity sits on
--- Every tile of a route given by its corner tiles, plus a step onto the target, as points from an origin tile;
--- with upTo, only its first upTo points.
+-- Returns every tile of a route given by its corner tiles, plus a step onto the target, as points from an origin
+-- tile; with upTo, only its first upTo points.
 local function routePoints(tiles, origin, upTo)
     upTo = upTo or math.huge
     local positions = { pointAt(origin, tiles[1].x, tiles[1].z) }

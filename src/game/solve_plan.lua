@@ -56,11 +56,11 @@ local function distancesFromStop(grid, stop, stops, doorsKey, blockedFor)
     return distances
 end
 
+-- Returns the stop to go to first, and the search from the player with every barrier shut (Routes.search with
+-- parents), for the route to that stop.
 -- stops: [n] = { kind = "key" or "door", x, z (the feature's tile), tiles (every tile it stands on), needs = the
 -- key stop a door needs, or nil when the key is held }.
 -- player: { x, z }. alwaysBlocked: tile index -> true for tiles never to cross (barriers that are not stops).
--- Returns the stop to go to first, and the search from the player with every barrier shut (Routes.search with
--- parents), for the route to that stop.
 function SolvePlan.nextStop(grid, player, stops, alwaysBlocked)
     local stopCount = #stops
     if stopCount == 0 then return nil end

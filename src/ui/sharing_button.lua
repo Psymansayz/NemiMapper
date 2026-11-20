@@ -10,8 +10,8 @@ local SIZE = 20 -- PrettyUI's close button's size
 local LEFT, TOP = 8, 6 -- from the window's corner, like the close button's
 local OFF_ALPHA = 0.45
 
--- The title bar's drag layer is a sibling over the window, so a button inside the window would be covered by it.
--- The button goes inside the drag layer instead, which hides and raises it with the window's title bar.
+-- Adds the button to window's title drag layer, which hides and raises it with the title bar.
+-- The drag layer is a sibling over the window, so a button inside the window would be covered by it.
 function SharingButton.add(PrettyUI, window, onToggle)
     local titleDrag = window.titleDrag
     local sprite = PrettyUI.NewComponent(ui.Sprite, titleDrag)
