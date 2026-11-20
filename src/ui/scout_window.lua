@@ -70,7 +70,7 @@ local function showCounts()
     end
     -- Once the search settles, the rotation reveals nodes missed between those found.
     -- They are in the forest but unseen, and their kinds count toward the total.
-    local kinds, _, missed, missedKinds = Forest.scoutCounts()
+    local kinds, missed, missedKinds = Forest.scoutCounts()
     local missedOf = {}
     for _, feature in ipairs(missed) do missedOf[feature.key] = (missedOf[feature.key] or 0) + 1 end
     -- The count goes green when the alert's test passes.
@@ -115,7 +115,8 @@ local function widthNeeded(PrettyUI, numberWidth, wordsWidth, isBlocking)
     return widest + PADDING * 2 + WINDOW_EDGE_WIDTH
 end
 
--- Opening it again brings it to the front. While the full-forest alert blocks the game, it has the unblock button.
+-- Opens the scout window, or brings it to the front if open. While the full-forest alert blocks the game, it has the
+-- unblock button.
 function ScoutWindow.open(PrettyUI, pluginLayer, onOpenMap)
     if isOpen() then return parts.window:Show() end
     local isBlocking = FullForestAlert.isBlocking()

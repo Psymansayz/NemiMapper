@@ -161,7 +161,7 @@ for _, task in ipairs(ForestFeatures.trinksTasks) do
     end
 end
 
--- Items in the backpack and worn equipment: item id -> true.
+-- Returns the items in the backpack and worn equipment: item id -> true.
 -- Inside the forest they are kept until the inventory changes; outside it they are read on each call.
 local HELD_INVENTORY_IDS = { config.Inv.INV.id, GameIds.resolve("Inv", "WORN") }
 local isHeldInventory = {}
@@ -199,7 +199,7 @@ function Forest.isTaskActive(task)
     return doneVariable == nil or doneVariable.value == 0
 end
 
--- Number of Trinks' tasks done today.
+-- Returns the number of Trinks' tasks done today.
 local tasksDoneVariable = GameIds.playerVariable("RAID1_GOEBIE_QUESTS_COMPLETE_TODAY")
 local tasksDoneBaseID = GameIds.baseIDOf(tasksDoneVariable)
 function Forest.tasksDoneToday()
@@ -820,10 +820,10 @@ function Forest.nodesMissedByRotation()
 end
 
 -- Returns the scout window's counts: node kinds found, plus kinds the rotation says were missed and none was found
--- of (once the search settles); total nodes found; the missed nodes' features in rotation order; and the kinds
--- counted as missed (key -> true).
+-- of (once the search settles); the missed nodes' features in rotation order; and the kinds counted as missed
+-- (key -> true).
 function Forest.scoutCounts()
-    local kinds, total = Forest.nodeCounts()
+    local kinds = Forest.nodeCounts()
     local missed, missedKinds = Forest.isSearching and {} or Forest.nodesMissedByRotation(), {}
     for _, feature in ipairs(missed) do
         if (Forest.countOf[feature.key] or 0) == 0 and not missedKinds[feature.key] then
@@ -831,7 +831,7 @@ function Forest.scoutCounts()
             kinds = kinds + 1
         end
     end
-    return kinds, total, missed, missedKinds
+    return kinds, missed, missedKinds
 end
 
 -- Returns how many of the nine node kinds the forest has, and how many nodes in total.

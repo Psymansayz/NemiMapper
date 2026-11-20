@@ -1,5 +1,5 @@
 -- The alert when a forest has every node kind (9/9 in the scout window) or, by its setting, every kind still
--- unclaimed today, given once per forest entry. 
+-- unclaimed today, given once per forest entry.
 -- The screen flashes green for ALERT_SECONDS, a second on and a second off, through a transparent rectangle.
 -- A nearly invisible rectangle takes the mouse's clicks, with the scout window raised above it.
 -- Alerts can end early via a button on the scout window.
@@ -91,7 +91,7 @@ end
 function FullForestAlert.check()
     if alerted then return end
     if not (Settings.flashOnFullForest or Settings.blockOnFullForest) then return end
-    local kinds, _, _, missedKinds = Forest.scoutCounts()
+    local kinds, _, missedKinds = Forest.scoutCounts()
     if not FullForestAlert.forestIsComplete(kinds, missedKinds) then return end
     alerted, ticks = true, 0
     Event.Logic.Subscribe(SUBSCRIPTION, onLogicTick)

@@ -32,7 +32,7 @@ dependency, see `plugin.json`). The `main` branch is the release; `dev` has the 
 | | `dialogue_text.lua` | Reads the info box and the NPC dialogue box, for follow messages and refusals. |
 | | `draw_distance.lua` | Raises the draw distance on entering, and restores the player's setting. |
 | | `game_ids.lua` | Turns the game's config names into ids at load. |
-| | `world_number.lua` | Reads the world number from the friends list's title. |
+| | `world_number.lua` | Reads the world number from the friends list's title, at load and when map sharing mode is turned on. |
 | `src/ui` | `map_window.lua` | The map window: zones, markers, the chosen and final routes, header, legends, buttons. |
 | | `scout_window.lua` | The scout window: node kinds found, counts, monsters left. |
 | | `full_forest_alert.lua` | The green flash and the click block on a 9/9 forest. |
@@ -218,14 +218,15 @@ The words used in the code (also listed at the top of `forest_stops.lua`):
 
 **Stops** (`forest_stops.lua`) are `{ kind = "key" or "door", x, z, tiles, colour, entry, needs }`. `needs` is the
 key stop a door needs, or nil when the key is held.
-- `mapStops()`: unclaimed nodes and the active task's target (NAVIGATE's targets).
+- `stopsWhere(isStop)`: the found features passing a test, as stops (`stopsOfKind`, `takenKeyStops`, NAVIGATE's
+  targets: unclaimed nodes and the active task's target).
 - `solveStops(held)`: each unfinished puzzle's key, unless held or taken by another player, and its door.
-- `stopsToward(targets, player, held)`: the targets plus only the keys and doors a tour to them needs
-  (`SolvePlan.neededStops` traces the doors on the way to each target). It also returns doors whose keys are not
-  seen yet, and doors whose keys another player has.
-- NAVIGATE's stops are cached (`keptPlan`) by a signature of the found features, the tools held and the keys
-  taken; the forest's few loops never lead round a barrier, so where the player stands does not change them.
-  `unneededNow` gives the puzzles no route to a node needs, which the map and highlights can hide.
+- `stopsToward(targets, player, held)`: a plan, `{ stops, unseenKeyDoors, takenKeys, puzzleStops }`: the targets
+  plus only the keys and doors a tour to them needs (`SolvePlan.neededStops` traces the doors on the way to each
+  target), the doors on the way whose keys are not seen yet, and the source keys on the way another player has.
+- NAVIGATE's plan (`mappingPlan`) is cached by a signature of the found features, the tools held and the keys
+  taken; the forest's few loops never lead round a barrier, so where the player stands does not change it. Its
+  `unneeded` holds the puzzles no route to a node needs, which the map and highlights can hide.
 
 **Plans** (`solve_plan.lua`): `SolvePlan.nextStop(grid, player, stops, alwaysBlocked)` finds the first stop of the
 shortest tour through every reachable stop, respecting doors (a door can only be crossed after its key) and leaving
@@ -245,7 +246,7 @@ One route is chosen at a time, map open or not: `RouteChoice.shown` (the key of 
 `mapping` (NAVIGATE down) or `solving` (SOLVE down). `update` works the route out (`chosenRoute`): a plan's next stop
 for NAVIGATE or SOLVE, or a route to the thing clicked; a target behind a door becomes a small plan toward it. It
 keeps the result in `RouteChoice.drawn` (`{ tiles, colour, target, stops, keysUnseen, ahead, trimmedX, trimmedZ }`)
-and calls `Highlights.beamOn`, `Highlights.showRoute` and `RouteChoice.onDrawn` (the map's `showRoutes`). It runs
+and calls `Highlights.showTarget`, `Highlights.showRoute` and `RouteChoice.onDrawn` (the map's `showRoutes`). It runs
 again when the forest, the choice or the tools held (`ToolsHeld.held`) change; on each step `showPlayer` cuts the
 route back to the player's nearest point on it (`ahead`), and straying more than three tiles works it out again. A plan drops its choice once it has nothing left, and a feature chosen with
 work left (`waitsFor`) drops once that is done.

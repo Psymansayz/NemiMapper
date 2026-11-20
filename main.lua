@@ -156,7 +156,6 @@ end
 -- follows them is redrawn only when they change.
 Forest.onChanged = function()
     local heldChanged = ToolsHeld.refresh()
-    WorldNumber.read()
     ScoutWindow.showForest()
     RouteChoice.showForest(heldChanged)
     MapWindow.showForest()
@@ -187,6 +186,7 @@ Forest.onInventoryChanged = function()
     Highlights.refresh()
 end
 
+WorldNumber.read()
 Forest.start()
 
 -- The plugin's two hub pages: the ribbon page and the settings page.
@@ -210,6 +210,8 @@ local function sharingChanged()
     -- A shared map shows the final route.
     -- A chosen route would replace it, and NAVIGATE's or SOLVE's would have no button left to turn it off.
     if Settings.mapSharingMode and RouteChoice.isChosen() then RouteChoice.choose(nil, false, false) end
+    -- The header shows the world, readable only while the friends list is loaded.
+    if Settings.mapSharingMode then WorldNumber.read() end
     MapWindow.showSettings()
     ScoutWindow.showSettings()
 end
@@ -484,7 +486,7 @@ local function closeView(view)
     return nil
 end
 
--- The day's status on the ribbon page
+-- The day's status on the ribbon page.
 local DAILY_COMPLETE_COLOUR, DAILY_INCOMPLETE_COLOUR = Colours.GREEN, Colours.GOLD
 local UNCLAIMED_COLOUR = Colours.RED | 0xFF
 local DAILY_LINE_HEIGHT = 22
@@ -652,12 +654,17 @@ local function settingsWidthNeeded()
     local widest = 0
     for _, row in ipairs(settingRows) do
         if row.section == nil then
-            local left = PAGE_PADDING + row.depth * INDENT
-            local width = row.slider and SLIDER_LEAST_WIDTH or row.text and TEXT_FIELD_WIDTH
-                or (row.keybind and KEYBIND_LABEL_WIDTH + COLUMN_GAP + KEYBIND_FIELD_WIDTH
-                    or PrettyUI.CheckboxButton.getSize({ { text = row.name, value = row.key } }))
-                + (row.info ~= nil and COLUMN_GAP + INFO_ICON_SIZE or 0)
-            widest = math.max(widest, left + width)
+            local width
+            if row.slider then
+                width = SLIDER_LEAST_WIDTH
+            elseif row.text then
+                width = TEXT_FIELD_WIDTH
+            else
+                width = row.keybind and KEYBIND_LABEL_WIDTH + COLUMN_GAP + KEYBIND_FIELD_WIDTH
+                    or PrettyUI.CheckboxButton.getSize({ { text = row.name, value = row.key } })
+                if row.info ~= nil then width = width + COLUMN_GAP + INFO_ICON_SIZE end
+            end
+            widest = math.max(widest, PAGE_PADDING + row.depth * INDENT + width)
         end
     end
     return widest + PAGE_PADDING + SCROLLBAR_WIDTH + WINDOW_EDGE_WIDTH

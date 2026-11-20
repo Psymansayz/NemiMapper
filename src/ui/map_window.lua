@@ -13,6 +13,7 @@ local ToolsHeld = require("src/game/tools_held")
 local WorldNumber = require("src/game/world_number")
 local Settings = require("src/data/settings")
 local WindowPlace = require("src/ui/window_place")
+local StatusText = require("src/ui/status_text")
 local SharingButton = require("src/ui/sharing_button")
 
 local MapWindow = {}
@@ -110,9 +111,9 @@ local function newRedraw()
     redraw = {}
 end
 
--- Returns a picture by its file name, with or without the extension.
+-- Returns a picture by its file name, without the extension.
 local function picture(name)
-    return Plugin.resources[name] or Plugin.resources[name .. ".png"]
+    return Plugin.resources[name]
 end
 
 local function isOpen()
@@ -359,12 +360,10 @@ local function workOutFinalRoute()
     end)
     -- Nodes and location tasks (the Pahtli plant) stay put.
     -- NPC tasks (the Traitor) walk about, so a route worked out once leaves them out.
-    local targets = ForestStops.stopsOfKind("node")
-    for _, task in ipairs(ForestFeatures.trinksTasks) do
-        if task.locations ~= nil then
-            for _, tile in ipairs(ForestStops.stopsOfKind("task", task.key)) do targets[#targets + 1] = tile end
-        end
-    end
+    local targets = ForestStops.stopsWhere(function(found)
+        local feature = found.feature
+        return feature.kind == "node" or (feature.kind == "task" and feature.locations ~= nil)
+    end)
     finalRouteOf = { entry = entry, routes = Routes.finalRoute(grid, openings[1] or entry, openings[2], targets) }
 end
 
@@ -413,15 +412,11 @@ end
 local EMPTY = {}
 
 -- Shows, on the map's bottom left above the duplicates note, which keys the route walks toward the forest's centre to
--- find (keysUnseen: their names), in the route's colour, or hides it with none. Written only on change.
+-- find (keysUnseen: their names), in the route's colour, or hides it with none.
 local function showKeysUnseen(keysUnseen, colour)
-    local content = keysUnseen and ("Walk to find " .. table.concat(keysUnseen, " and ")) or nil
-    if content == parts.keysUnseenShown and colour == parts.keysUnseenColour then return end
-    parts.keysUnseenShown, parts.keysUnseenColour = content, colour
-    setHidden(parts.keysUnseenText, content == nil)
-    if content ~= nil then
-        parts.keysUnseenText.content = content
-        parts.keysUnseenText.rgba = colour
+    setHidden(parts.keysUnseenLine.text, keysUnseen == nil)
+    if keysUnseen ~= nil then
+        StatusText.set(parts.keysUnseenLine, "Walk to find " .. table.concat(keysUnseen, " and "), colour)
     end
 end
 
@@ -456,11 +451,15 @@ local function paintRoutes()
     end
 end
 
+-- Returns the route's stops, which stay shown on the map by their own setting.
+local function stopsKeptShown()
+    return Settings.alwaysShowTarget and RouteChoice.drawn and RouteChoice.drawn.stops or EMPTY
+end
+
 -- Shows the route chosen: the legend's pressed buttons and outlines, the route, and the icons and signs shown only
 -- as its stops.
 local function showRoute()
-    local drawn = RouteChoice.drawn
-    if Settings.alwaysShowTarget and not ForestStops.sameSet(drawn and drawn.stops or EMPTY, parts.stopsShown) then
+    if not ForestStops.sameSet(stopsKeptShown(), parts.stopsShown) then
         placeMarkers()
         placeSigns()
     end
@@ -489,14 +488,8 @@ end
 local function isMarkerShown(entry, held, unneeded)
     local shows, feature = view(), entry.feature
     -- The route's stops stay by their own setting, except a key just taken, as the route is about to move on.
-    local drawn = RouteChoice.drawn
-    if Settings.alwaysShowTarget and drawn ~= nil and drawn.stops[entry]
-        and not (feature.kind == "source" and held[feature.key]) then
-        return true
-    end
-    if feature.isPuzzle then
-        return shows.puzzleElements and not unneeded[entry] and ForestStops.isPuzzleLeft(entry, held)
-    end
+    if parts.stopsShown[entry] and not (feature.kind == "source" and held[feature.key]) then return true end
+    if feature.isPuzzle then return shows.puzzleElements and ForestStops.isPuzzleNeeded(entry, held, unneeded) end
     if feature.kind == "node" then return shows.nodes and (shows.usedNodes or not entry.isUsed) end
     if feature.kind == "task" then return shows.tasks or Forest.isTaskActive(feature) end
     return true
@@ -544,8 +537,8 @@ placeMarkers = function()
     if mapHidden() then return end
     parts.markerOf = {} -- entry -> its marker, while shown
     local shown, held = 0, ToolsHeld.held
-    local unneeded = view().unneededPuzzles and {} or ForestStops.unneededNow(held)
-    parts.stopsShown = RouteChoice.drawn and RouteChoice.drawn.stops or EMPTY
+    local unneeded = view().unneededPuzzles and EMPTY or ForestStops.mappingPlan(held).unneeded
+    parts.stopsShown = stopsKeptShown()
     for _, entry in ipairs(Forest.found) do
         if isMarkerShown(entry, held, unneeded) then
             shown = shown + 1
@@ -581,7 +574,7 @@ end
 -- Places each entrance sign at its opening's clearing.
 placeSigns = function()
     if mapHidden() then return end
-    local stops = Settings.alwaysShowTarget and RouteChoice.drawn and RouteChoice.drawn.stops or EMPTY
+    local stops = parts.stopsShown
     for _, sign in ipairs(parts.signs) do
         local opening = ForestStops.openingOn(sign.side)
         if opening ~= nil and not view().entranceSigns and not stops[opening] then opening = nil end
@@ -627,13 +620,13 @@ local function placeHeaderTexts()
     local font = config.Font.FromID(HEADER_FONT)
     local countLeft = frame.left + COMPASS_SIZE + 10
     local right = frame.mapLeft + frame.mapSize - 4
-    local countNeeded = font:GetStringWidth(parts.countContent or "") + 4
-    local chatNeeded = font:GetStringWidth(parts.headerTextShown) + 4
+    local countNeeded = font:GetStringWidth(parts.countLine.content or "") + 4
+    local chatNeeded = font:GetStringWidth(parts.headerLine.content) + 4
     local boundary = math.min(frame.mapLeft + math.floor(frame.mapSize * HEADER_SPLIT), right - chatNeeded)
     boundary = math.min(math.max(boundary, countLeft + countNeeded), right)
     local headerTop = frame.top + (HEADER_HEIGHT - HEADER_TEXT_HEIGHT) / 2
-    setBox(parts.countText, countLeft, headerTop, boundary - countLeft, HEADER_TEXT_HEIGHT)
-    setBox(parts.headerText, boundary, headerTop, right - boundary, HEADER_TEXT_HEIGHT)
+    setBox(parts.countLine.text, countLeft, headerTop, boundary - countLeft, HEADER_TEXT_HEIGHT)
+    setBox(parts.headerLine.text, boundary, headerTop, right - boundary, HEADER_TEXT_HEIGHT)
 end
 
 local function showCountText()
@@ -641,15 +634,14 @@ local function showCountText()
     local countText = "Enter the Forest"
     if Forest.bounds ~= nil then
         local duplicates = total - kinds
-        parts.world = WorldNumber.read()
-        countText = (parts.world and ("W" .. parts.world .. " ") or "") .. kinds .. "/" .. #ForestFeatures.nodes
+        local world = WorldNumber.world
+        countText = (world and ("W" .. world .. " ") or "") .. kinds .. "/" .. #ForestFeatures.nodes
         if duplicates > 0 then
             countText = countText .. " (+" .. duplicates .. (duplicates == 1 and " duplicate)" or " duplicates)")
         end
     end
-    if parts.countContent ~= countText then
-        parts.countContent = countText
-        parts.countText.content = countText
+    if parts.countLine.content ~= countText then
+        StatusText.set(parts.countLine, countText)
         if parts.headerShown then placeHeaderTexts() end
     end
     return kinds, total
@@ -737,11 +729,10 @@ local function shownPuzzlePairs()
     local shows = view()
     if shows.puzzleLegend and not shows.unneededPairs and Forest.bounds ~= nil then
         local held = ToolsHeld.held
-        local unneeded, needed = ForestStops.unneededNow(held), {}
+        local unneeded, needed = ForestStops.mappingPlan(held).unneeded, {}
         for _, entry in ipairs(Forest.found) do
-            local feature = entry.feature
-            if feature.isPuzzle and not unneeded[entry] and ForestStops.isPuzzleLeft(entry, held) then
-                needed[feature.pair] = true
+            if entry.feature.isPuzzle and ForestStops.isPuzzleNeeded(entry, held, unneeded) then
+                needed[entry.feature.pair] = true
             end
         end
         shown = {}
@@ -785,15 +776,15 @@ end
 local PUZZLE_WINDOW_LEAST_WIDTH = EDGE + MINIMUM_MAP_SIZE
     + clampedLegendWidth(MINIMUM_MAP_SIZE * LEGEND_TO_MAP, LEGEND_MINIMUM_WIDTH) + WINDOW_EDGE_WIDTH
 
--- A simplified legend is as wide as its NAVIGATE button, inside the legend's border.
+-- Returns the node legend's least width; a simplified one is as wide as its NAVIGATE button, inside its border.
 local function legendMinimumWidth()
     if not view().simpleLegends then return LEGEND_MINIMUM_WIDTH end
     return MAP_ROUTE_HEIGHT + 2
 end
 
 -- Returns whether the node legend shows a feature's row.
-local function legendRowShown(feature, listIndex)
-    if listIndex == 2 then return view().taskLegend or Forest.isTaskActive(feature) end
+local function legendRowShown(feature)
+    if feature.kind == "task" then return view().taskLegend or Forest.isTaskActive(feature) end
     return view().claimedInLegend or not Forest.isNodeClaimed(feature.key)
 end
 
@@ -810,41 +801,35 @@ local function legendHeading(legendWidth)
     return view().simpleLegends and 0 or font.size + HEADING_PADDING * 2, font
 end
 
--- Returns the node legend's rows shown, its lists shown (the tasks' heading goes with any task row shown), and the rows
--- it leaves out (claimed nodes, tasks not active) as a string to notice a change by.
+-- Returns the node legend's rows shown: { rows, headings (the tasks' heading goes with any task row shown),
+-- hiddenKey (the rows left out, claimed nodes and tasks not active, as a string to notice a change by) }.
 local function legendRowsShown()
-    local counted = redraw.legendRows
-    if counted == nil then
-        local rows, taskRows, hidden = 0, 0, {}
-        for listIndex, list in ipairs(LEGEND_LISTS) do
-            for _, feature in ipairs(list) do
-                if legendRowShown(feature, listIndex) then
-                    rows = rows + 1
-                    if listIndex == 2 then taskRows = taskRows + 1 end
-                else
-                    hidden[#hidden + 1] = feature.key
-                end
+    if redraw.legendRows ~= nil then return redraw.legendRows end
+    local rows, taskRows, hidden = 0, 0, {}
+    for _, list in ipairs(LEGEND_LISTS) do
+        for _, feature in ipairs(list) do
+            if legendRowShown(feature) then
+                rows = rows + 1
+                if feature.kind == "task" then taskRows = taskRows + 1 end
+            else
+                hidden[#hidden + 1] = feature.key
             end
         end
-        counted = { rows, taskRows > 0 and #LEGEND_LISTS or 1, table.concat(hidden, " ") }
-        redraw.legendRows = counted
     end
-    return counted[1], counted[2], counted[3]
+    redraw.legendRows = { rows = rows, headings = taskRows > 0 and #LEGEND_LISTS or 1,
+        hiddenKey = table.concat(hidden, " ") }
+    return redraw.legendRows
 end
 
 -- Returns whether the node legend shows: by its setting, while it has a row to show. With every node claimed and
 -- left out and no task shown, it goes with NAVIGATE, which has nothing left to do, and the map takes its room.
 local function nodeLegendShown()
-    return view().nodeLegend and legendRowsShown() > 0
+    return view().nodeLegend and legendRowsShown().rows > 0
 end
 
 -- Returns a simplified node legend's width: its widest picture at the rows' height.
 local function simpleLegendWidthFor(legendHeight, rowCount)
-    if rowCount == nil then
-        rowCount = 0
-        for _, list in ipairs(LEGEND_LISTS) do rowCount = rowCount + #list end
-    end
-    rowCount = math.max(1, rowCount)
+    rowCount = math.max(1, rowCount or #LEGEND_NAMES)
     local rowHeight = (legendHeight - (view().mapRoute and MAP_ROUTE_HEIGHT or 0)) / rowCount
     local widest = 0
     for _, list in ipairs(LEGEND_LISTS) do
@@ -859,7 +844,7 @@ end
 
 -- Returns a node legend's width when in its own window.
 local function poppedNodeLegendWidth(legendHeight)
-    if view().simpleLegends then return simpleLegendWidthFor(legendHeight, (legendRowsShown())) end
+    if view().simpleLegends then return simpleLegendWidthFor(legendHeight, legendRowsShown().rows) end
     return clampedLegendWidth(legendHeight * LEGEND_TO_MAP, LEGEND_MINIMUM_WIDTH)
 end
 
@@ -905,14 +890,13 @@ end
 -- Returns whether the legends must be laid out again: the puzzle legend coming or going, rows hidden or shown again,
 -- the puzzles shown changing, or a simplified cell's picture switching between key and door.
 local function needsLayout()
-    return parts.puzzleShown ~= puzzleLegendShown() or parts.hiddenRowsKey ~= select(3, legendRowsShown())
+    return parts.puzzleShown ~= puzzleLegendShown() or parts.hiddenRowsKey ~= legendRowsShown().hiddenKey
         or parts.shownPairsKey ~= shownPairsKey()
 end
 
 local function showForest()
     newRedraw()
-    if needsLayout() then return layoutFitting() end
-    showFound()
+    if needsLayout() then layoutFitting() else showFound() end
 end
 
 -- Updates the map for a change in the tools held. The chosen route follows by MapWindow.showRoutes.
@@ -1003,7 +987,8 @@ local function layoutNodeLegend(box)
     local simple = shows.simpleLegends
     local showsTexts = showsLegend and not simple
     local headingHeight, headingFontEntry = legendHeading(legendWidth)
-    local rowsShown, headingsShown = legendRowsShown()
+    local legendRows = legendRowsShown()
+    local rowsShown, headingsShown = legendRows.rows, legendRows.headings
     local rowHeight = rowsShown > 0 and (rowsHeight - headingHeight * headingsShown) / rowsShown or 0
     -- Kept so the legend's own window can keep its rows as tall when rows come or go.
     if rowsShown > 0 then parts.nodeRowHeight = rowHeight end
@@ -1027,7 +1012,7 @@ local function layoutNodeLegend(box)
         for index = nextRow, nextRow + heading.rowCount - 1 do
             local row = parts.legendRows[index]
             -- The outline and red cover are shown or hidden by showLegendStates, which follows.
-            local rowShown = legendRowShown(row.feature, headingIndex)
+            local rowShown = legendRowShown(row.feature)
             row.isShown = showsLegend and rowShown
             setAllHidden(not row.isShown, row.cell, row.icon)
             setAllHidden(not showsTexts or not rowShown, row.name, row.skill)
@@ -1165,6 +1150,16 @@ local function legendWindowShown()
     return false
 end
 
+-- Closes the map on the next frame if nothing of it shows then: hidden by its X, with no legend window left.
+-- A legend window hides as its legend goes, in the middle of a layout, so the map cannot be destroyed there.
+local CLOSE_SUBSCRIPTION = "nemi_mapper_map_close"
+local function closeWhenNothingShows()
+    Event.Draw.Subscribe(CLOSE_SUBSCRIPTION, function()
+        Event.Draw.Unsubscribe(CLOSE_SUBSCRIPTION)
+        if isOpen() and parts.window.root.hidden == true and not legendWindowShown() then MapWindow.close() end
+    end)
+end
+
 local function showPoppedWindows()
     for _, host in ipairs({ parts.nodeHost, parts.puzzleHost }) do
         local window = host.window
@@ -1176,6 +1171,7 @@ local function showPoppedWindows()
                 window:Show()
             elseif not shown and window.root.hidden ~= true then
                 hideWindow(window)
+                if parts.window.root.hidden == true and not legendWindowShown() then closeWhenNothingShows() end
             end
         end
     end
@@ -1240,17 +1236,18 @@ local function layout(contentWidth, contentHeight)
     setBox(parts.chrome, 0, 0, contentWidth, contentHeight)
     setBox(parts.map, frame.mapLeft, frame.mapTop, mapSize, mapSize)
     setBox(parts.duplicatesText, 8, mapSize - TEXT_HEIGHT - 6, mapSize - 16, TEXT_HEIGHT)
-    setBox(parts.keysUnseenText, 8, mapSize - 2 * TEXT_HEIGHT - 6, mapSize - 16, TEXT_HEIGHT)
+    setBox(parts.keysUnseenLine.text, 8, mapSize - 2 * TEXT_HEIGHT - 6, mapSize - 16, TEXT_HEIGHT)
     placeCompassSprite(parts.compassRing, COMPASS_RING_PIXELS, frame)
     placeCompassSprite(parts.compassBacking, COMPASS_BACKING_PIXELS, frame)
     placeCompassSprite(parts.compass, COMPASS_NEEDLE_PIXELS, frame)
-    setAllHidden(not showsHeader, parts.countText, parts.headerText)
+    setAllHidden(not showsHeader, parts.countLine.text, parts.headerLine.text)
     if showsHeader then placeHeaderTexts() end
 
     -- A node legend window's height follows its rows: when rows come or go (nodes claimed, another setting), each
     -- row keeps its height, so the window shrinks or grows by the rows'.
-    local rowsNow, headingsNow, hiddenRows = legendRowsShown()
-    parts.hiddenRowsKey = hiddenRows
+    local legendRows = legendRowsShown()
+    local rowsNow, headingsNow = legendRows.rows, legendRows.headings
+    parts.hiddenRowsKey = legendRows.hiddenKey
     if nodePopped then
         local window = parts.nodeHost.window
         local headingHeight = legendHeading(window.root.width - WINDOW_EDGE_WIDTH)
@@ -1333,16 +1330,16 @@ local function build(nodeWindow, puzzleWindow)
     parts.playerMarker.rgba = PLAYER_COLOUR
     parts.duplicatesText = addText(parts.map, TEXT_FONT, TEXT_COLOUR, ui.AlignMode.TOPLEFT,
         "DUPLICATE NODES DO NOT GIVE EXP")
-    parts.keysUnseenText = addText(parts.map, TEXT_FONT, TEXT_COLOUR, ui.AlignMode.TOPLEFT)
-    setHidden(parts.keysUnseenText, true)
+    parts.keysUnseenLine = StatusText.new(addText(parts.map, TEXT_FONT, TEXT_COLOUR, ui.AlignMode.TOPLEFT))
+    setHidden(parts.keysUnseenLine.text, true)
 
     -- The ring is filled in the middle, so it goes under the backing and needle.
     parts.compassRing = addGameSprite(content, COMPASS_RING_SPRITE)
     parts.compassBacking = addGameSprite(content, COMPASS_BACKING_SPRITE)
     parts.compass = addGameSprite(content, COMPASS_SPRITE)
-    parts.countText = addText(content, HEADER_FONT, TEXT_COLOUR, ui.AlignMode.TOPLEFT)
-    parts.headerText = addText(content, HEADER_FONT, TEXT_COLOUR, ui.AlignMode.BOTTOMRIGHT, Settings.headerText)
-    parts.headerTextShown = Settings.headerText
+    parts.countLine = StatusText.new(addText(content, HEADER_FONT, TEXT_COLOUR, ui.AlignMode.TOPLEFT))
+    parts.headerLine = StatusText.new(addText(content, HEADER_FONT, TEXT_COLOUR, ui.AlignMode.BOTTOMRIGHT))
+    StatusText.set(parts.headerLine, Settings.headerText)
 
     -- Returns where a legend draws: the frame, or its own window, with a canvas of its own there for its
     -- background, border and dividers.
@@ -1511,13 +1508,11 @@ local function fitWindowTo(mapSize)
     parts.window:SetSize(math.min(width, parts.pluginLayer.width), math.min(height, parts.pluginLayer.height))
 end
 
--- Lays the frame out again. Returns whether it was fitted.
+-- Lays the frame out again, fitting the window to it when parts come or go.
 layoutFitting = function()
     local mapSize, partsBefore = parts.frame.mapSize, framePartsShown()
     layout(parts.contentWidth, parts.contentHeight)
-    if framePartsShown() == partsBefore then return false end
-    fitWindowTo(mapSize)
-    return true
+    if framePartsShown() ~= partsBefore then fitWindowTo(mapSize) end
 end
 
 -- Fits the window to the frame once a resize ends, so no background shows.
@@ -1676,11 +1671,6 @@ function MapWindow.showPlayer(heldChanged)
     newRedraw()
     showPlayer()
     if heldChanged then showHeld() end
-    -- The world is readable only while the friends list is open, so it is checked on each step until known, while
-    -- the header shows it.
-    if parts.headerShown and parts.world == nil and Forest.bounds ~= nil and WorldNumber.read() ~= nil then
-        showCountText()
-    end
 end
 
 -- Called when the route chosen or drawn changes (RouteChoice.onDrawn).
@@ -1693,9 +1683,8 @@ end
 -- Shows the header text setting.
 -- Its text takes new room from the count, and nothing else moves.
 local function showHeaderText()
-    if parts.headerTextShown == Settings.headerText then return end
-    parts.headerTextShown = Settings.headerText
-    parts.headerText.content = Settings.headerText
+    if parts.headerLine.content == Settings.headerText then return end
+    StatusText.set(parts.headerLine, Settings.headerText)
     if parts.headerShown then placeHeaderTexts() end
 end
 
@@ -1730,6 +1719,7 @@ function MapWindow.isOpen()
 end
 
 function MapWindow.close()
+    Event.Draw.Unsubscribe(CLOSE_SUBSCRIPTION)
     if not isOpen() then return end
     local window = parts.window
     release()
