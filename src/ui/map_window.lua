@@ -344,9 +344,9 @@ end
 
 -- The final route runs through every node from the opening the player entered by (the one nearer their first tile)
 -- to the other. Redoing it on each node found would cost a search per node, so it is worked out once per forest
--- entry, after the search settles, and kept, which also keeps it unchanged when the map reopens or the player
--- leaves. It is only for sharing, so it waits for the next server tick rather than share a frame with NAVIGATE's
--- plan, and is skipped while a route is chosen.
+-- entry, once the search ends and the grid settles, and kept, which also keeps it unchanged when the map reopens or
+-- the player leaves. It is only for sharing, so it waits for the next server tick rather than share a frame with
+-- NAVIGATE's plan, and is skipped while a route is chosen.
 local finalRouteOf = nil -- { entry, routes } for the last forest entered, keyed by its entry tile
 local waitForFinalRoute -- defined below paintRoutes, which it calls
 local function workOutFinalRoute()
@@ -371,7 +371,7 @@ end
 local function finalRoutes()
     if Forest.entryTile == nil then return nil end
     if finalRouteOf ~= nil and finalRouteOf.entry == Forest.entryTile then return finalRouteOf.routes end
-    if not Forest.isSearching then waitForFinalRoute() end
+    if not Forest.isSearching and Forest.grid.settled then waitForFinalRoute() end
     return nil
 end
 
@@ -476,7 +476,8 @@ waitForFinalRoute = function()
         Event.ServerLogic.Unsubscribe(FINAL_ROUTE_SUBSCRIPTION)
         if not isOpen() then return end
         newRedraw()
-        if Forest.grid ~= nil and Forest.entryTile ~= nil and not Forest.isSearching and view().finalRoute
+        if Forest.grid ~= nil and Forest.grid.settled and Forest.entryTile ~= nil and not Forest.isSearching
+            and view().finalRoute
             and not RouteChoice.isChosen() then
             workOutFinalRoute()
             paintRoutes()
@@ -963,17 +964,17 @@ end
 function showLegendStates()
     for _, pair in ipairs(parts.puzzlePairs) do
         setHidden(pair.outline, not parts.puzzleShown or not pair.isShown
-            or pair.toolPair.source.key ~= RouteChoice.shown)
+            or pair.toolPair.source.key ~= RouteChoice.keyChosen())
     end
     for _, row in ipairs(parts.legendRows) do
-        setHidden(row.outline, not row.isShown or row.feature.key ~= RouteChoice.shown)
+        setHidden(row.outline, not row.isShown or row.feature.key ~= RouteChoice.keyChosen())
         setHidden(row.missing, not row.isShown or not row.isNeeded)
         if row.claimedBackground ~= nil then -- (nodes only)
             setHidden(row.claimedBackground, not row.isShown or not row.isClaimedAbsent)
         end
     end
-    showButton(parts.solveButton, RouteChoice.solving)
-    showButton(parts.mapRouteButton, RouteChoice.mapping)
+    showButton(parts.solveButton, RouteChoice.isPlanChosen("solve"))
+    showButton(parts.mapRouteButton, RouteChoice.isPlanChosen("navigate"))
 end
 
 local function layoutNodeLegend(box)
@@ -1440,7 +1441,7 @@ local function build(nodeWindow, puzzleWindow)
     end
     -- The buttons' plans need the player in the forest, so they do nothing outside it.
     parts.mapRouteButton = addButton(content, "NAVIGATE", function()
-        if Forest.isInside then RouteChoice.choose(nil, false, not RouteChoice.mapping) end
+        if Forest.isInside then RouteChoice.togglePlan("navigate") end
     end)
     if nodeWindow ~= nil then parts.nodeHost.overlay = create(ui.Canvas, content) end
 
@@ -1462,7 +1463,7 @@ local function build(nodeWindow, puzzleWindow)
     -- The frame's overlay covers the legends in the frame, so it is made after them.
     parts.overlay = create(ui.Canvas, parts.window.content)
     parts.solveButton = addButton(content, "SOLVE", function()
-        if Forest.isInside then RouteChoice.choose(nil, not RouteChoice.solving, false) end
+        if Forest.isInside then RouteChoice.togglePlan("solve") end
     end)
 end
 

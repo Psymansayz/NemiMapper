@@ -352,6 +352,16 @@ function Highlights.refresh()
     end
 end
 
+-- Shows the chosen route (RouteChoice.drawn): its target's beam, its stops' boxes and the route on the ground, or with
+-- cutBack only cuts the ground route back to what is left ahead of the player.
+function Highlights.showChosen(drawn, cutBack)
+    if cutBack then return Highlights.trimRoute(drawn.ahead) end
+    -- An opening is not a feature found, so it gets no beam.
+    local target = drawn and drawn.target
+    Highlights.showTarget(target and target.feature and target or nil, drawn and drawn.stops or NONE)
+    Highlights.showRoute(drawn and drawn.tiles, drawn and drawn.colour)
+end
+
 -- Shows the chosen route's target (entry, with the beam) and its stops (entry -> true, boxed by their setting).
 function Highlights.showTarget(entry, stops)
     if beamTarget == entry and ForestStops.sameSet(routeStops, stops) then return end

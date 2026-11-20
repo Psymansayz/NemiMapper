@@ -107,6 +107,7 @@ function ForestStops.stopOf(entry)
     local stop = tilesOfEntry(entry)
     stop.kind = entry.feature.kind == "barrier" and "door" or "key"
     stop.colour, stop.entry = ForestFeatures.colourOf(entry.feature), entry
+    if entry.feature.kind == "node" then stop.group = entry.feature.key end
     return stop
 end
 
