@@ -130,6 +130,8 @@ local guidanceWaiting = false
 -- Windows open before entering the forest stay open after leaving it.
 local openBeforeEntering = { scout = false, map = false }
 
+RouteChoice.onDrawn = MapWindow.showRoutes
+
 Forest.onEntered = function()
     FullForestAlert.reset()
     openBeforeEntering.scout, openBeforeEntering.map = ScoutWindow.isOpen(), MapWindow.isOpen()
@@ -150,35 +152,39 @@ Forest.onLeft = function()
     ForestStops.forget()
     ToolsHeld.forget()
 end
+-- The tools held are worked out once per step, inventory change and forest change (ToolsHeld.refresh), and what
+-- follows them is redrawn only when they change.
 Forest.onChanged = function()
+    local heldChanged = ToolsHeld.refresh()
     WorldNumber.read()
     ScoutWindow.showForest()
-    RouteChoice.showForest()
+    RouteChoice.showForest(heldChanged)
     MapWindow.showForest()
     Highlights.refresh()
     FullForestAlert.check()
     if guidanceWaiting and not Forest.isSearching then
         guidanceWaiting = false
         RouteChoice.startMapping()
-        MapWindow.showRoutes()
     end
 end
 Forest.onMoved = function()
-    RouteChoice.showPlayer()
-    MapWindow.showPlayer()
-    Highlights.followPlayer()
+    local heldChanged = ToolsHeld.refresh()
+    RouteChoice.showPlayer(heldChanged)
+    MapWindow.showPlayer(heldChanged)
+    if heldChanged then Highlights.refresh() end
 end
 Forest.onMonstersChanged = ScoutWindow.showMonsters
 Forest.onNpcMoved = function(entry)
     RouteChoice.showNpcMoved(entry)
-    MapWindow.showNpcMoved(entry)
+    MapWindow.showNpcMoved()
 end
 
 Forest.onInventoryChanged = function()
     ToolsHeld.update()
-    RouteChoice.showInventory()
-    MapWindow.showInventory()
-    Highlights.followPlayer()
+    if not ToolsHeld.refresh() then return end
+    RouteChoice.showHeld()
+    MapWindow.showHeld()
+    Highlights.refresh()
 end
 
 Forest.start()
@@ -199,10 +205,7 @@ local ROW_GAP = 2 -- PrettyUI's default gap of 8 spreads the settings too far ap
 -- What each setting's change refreshes; a row's onChange is called with nothing.
 local mapChanged, headerChanged = MapWindow.showSettings, MapWindow.showHeaderText
 local highlightsChanged, scoutChanged = Highlights.refresh, ScoutWindow.showSettings
-local function routesChanged()
-    RouteChoice.update()
-    MapWindow.showRoutes()
-end
+local routesChanged = RouteChoice.update
 local function sharingChanged()
     -- A shared map shows the final route.
     -- A chosen route would replace it, and NAVIGATE's or SOLVE's would have no button left to turn it off.
@@ -469,7 +472,7 @@ end
 
 local function newView(pluginLayer, layout)
     return PrettyUI.SimpleView.new(pluginLayer, {
-        width = pluginLayer.width, height = pluginLayer.height, scrollable = true, layout = layout,
+        categoryID = "auto", width = pluginLayer.width, height = pluginLayer.height, scrollable = true, layout = layout,
     })
 end
 
@@ -526,7 +529,7 @@ local function onInventoryUpdated(event)
     if event.inv.id == config.Inv.INV.id then showDailyStatus() end
 end
 local function followBackpack()
-    if pageStatus ~= nil and Forest.taskCountsItems() then
+    if Forest.taskCountsItems() then
         Event.InventoryUpdated.Subscribe(DAILY_SUBSCRIPTION, onInventoryUpdated)
     else
         Event.InventoryUpdated.Unsubscribe(DAILY_SUBSCRIPTION)
@@ -671,8 +674,8 @@ openSettings = function()
         local x, y, width, height = WindowPlace.restore(pluginLayer, "settings", SETTINGS_WINDOW_WIDTH,
             SETTINGS_WINDOW_HEIGHT, minimumWidth)
         settingsWindow = PrettyUI.Window.new(pluginLayer, {
-            title = "Nemi Mapper settings", x = x, y = y, width = width, height = height, scrollable = true,
-            resizable = true, minWidth = minimumWidth, minHeight = SETTINGS_WINDOW_MINIMUM_HEIGHT,
+            categoryID = "auto", title = "Nemi Mapper settings", x = x, y = y, width = width, height = height,
+            scrollable = true, resizable = true, minWidth = minimumWidth, minHeight = SETTINGS_WINDOW_MINIMUM_HEIGHT,
             destroyOnClose = true, onClose = releaseSettingsWindow, -- its X button destroys it
         })
         addAllSettings(settingsWindow)
@@ -696,10 +699,7 @@ end
 Event.ContentLayerReady.Subscribe("nemi_mapper_content", function(event)
     closePage()
     local built, buildError = pcall(buildPage, event.component)
-    if not built then
-        pageStatus = nil -- the page's variables are followed only once it is whole
-        print(LOG_PREFIX .. "the plugin page failed: " .. tostring(buildError))
-    end
+    if not built then print(LOG_PREFIX .. "the plugin page failed: " .. tostring(buildError)) end
 end)
 
 Event.SettingsLayerReady.Subscribe("nemi_mapper_settings", function(event)

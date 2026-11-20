@@ -5,6 +5,7 @@ local Forest = require("src/game/forest")
 local ToolsHeld = require("src/game/tools_held")
 local Settings = require("src/data/settings")
 local ForestStops = require("src/game/forest_stops")
+local RibbonEdges = require("src/game/ribbon_edges")
 
 local Highlights = {}
 
@@ -166,11 +167,10 @@ end
 
 -- Returns what to highlight now, as [name] = { entry, colour, x, z, box, faces, beam }, each kind true when wanted.
 -- An NPC's box is drawn as edges (box) and faces.
-local function wanted(held)
+local function wanted()
     local wantedHighlights = {}
     if not Forest.isInside or Forest.playerTile == nil then return wantedHighlights end
-    held = held or ToolsHeld.sourceKeys()
-    local unneeded = NONE
+    local held, unneeded = ToolsHeld.held, NONE
     if Settings.highlightInWorld and Settings.highlightPuzzles and not Settings.highlightUnneededPuzzles then
         unneeded = ForestStops.unneededNow(held)
     end
@@ -234,7 +234,7 @@ local function followTracked()
     for _, highlight in pairs(tracked) do
         -- the live entity the forest keeps (forest.lua's followNpcs)
         local entity = highlight.entry.npcEntity
-        if entity == nil or not entity.isValid then
+        if not entity.isValid then
             if highlight.atX ~= nil then
                 highlight.atX = nil
                 for _, instance in pairs(highlight.instances) do instance.visible = false end
@@ -338,8 +338,8 @@ local function refreshInstances(name, wantedHighlight)
 end
 
 -- Makes the world's highlights match what the settings ask for.
-function Highlights.refresh(held)
-    local wantedHighlights = wanted(held)
+function Highlights.refresh()
+    local wantedHighlights = wanted()
     for name, highlight in pairs(shown) do
         if wantedHighlights[name] == nil then destroyHighlight(name, highlight) end
     end
@@ -353,22 +353,9 @@ function Highlights.refresh(held)
 end
 
 function Highlights.beamOn(entry, stops)
-    stops = stops or NONE
     if beamTarget == entry and ForestStops.sameSet(routeStops, stops) then return end
     beamTarget, routeStops = entry, stops
     Highlights.refresh()
-end
-
-local heldShown = {} -- the tools held at the last refresh from a step or an inventory change, by source key
-
--- Called on each player step and inventory change; refreshes only when the tools held have changed.
-function Highlights.followPlayer()
-    if not Forest.isInside or Forest.playerTile == nil then return end
-    local held = ToolsHeld.sourceKeys()
-    if not ForestStops.sameSet(held, heldShown) then
-        heldShown = held
-        Highlights.refresh(held)
-    end
 end
 
 -- A line's width is in pixels, so its ends fall short at the turns. The chosen route is instead drawn on the
@@ -380,39 +367,16 @@ local segmentEntity = nil -- the straight run the player is on, while a corner l
 local routeColour = nil
 local routeBuild = nil -- { edges, ribbon, drawn } while the route is being drawn
 
--- The ribbon's edges at each point (tile middles, in fine units): { left, right }. At a turn both steps share
--- the mitre point, so a diagonal meets a straight step flush. The ends extend by half the width.
-local MITRE_LEAST = 0.001 -- normals summing shorter than this mean the route doubled back: no mitre
-local MITRE_LONGEST = 3 -- half widths: caps a sharp turn's mitre, which would otherwise grow without limit
+-- The ribbon's edges at each point (tile middles, in fine units): { left, right }.
 local function ribbonEdges(points)
-    local count = #points
-    local directions, edges = {}, {}
-    for index = 1, count - 1 do
-        local from, to = points[index], points[index + 1]
-        local length = math.sqrt((to.x - from.x) ^ 2 + (to.z - from.z) ^ 2)
-        directions[index] = { x = (to.x - from.x) / length, z = (to.z - from.z) / length }
-    end
+    local count, pointX, pointZ = #points, {}, {}
+    for index, point in ipairs(points) do pointX[index], pointZ[index] = point.x, point.z end
+    local leftX, leftZ, rightX, rightZ = {}, {}, {}, {}
+    RibbonEdges.fill(pointX, pointZ, count, ROUTE_HALF_WIDTH, false, {}, {}, leftX, leftZ, rightX, rightZ)
+    local edges = {}
     for index = 1, count do
-        local before, after, point = directions[index - 1], directions[index], points[index]
-        local offsetX, offsetZ, x, z
-        local normalX = before and after and -before.z - after.z
-        local normalZ = before and after and before.x + after.x
-        local size = normalX and math.sqrt(normalX ^ 2 + normalZ ^ 2) or 0
-        if size > MITRE_LEAST then
-            local reach = math.min(ROUTE_HALF_WIDTH * MITRE_LONGEST,
-                ROUTE_HALF_WIDTH / ((normalX * -before.z + normalZ * before.x) / size))
-            offsetX, offsetZ, x, z = normalX / size * reach, normalZ / size * reach, point.x, point.z
-        elseif before ~= nil and after ~= nil then
-            -- doubled back: no mitre, so keep the incoming step's sides
-            offsetX, offsetZ, x, z = -before.z * ROUTE_HALF_WIDTH, before.x * ROUTE_HALF_WIDTH, point.x, point.z
-        else
-            local direction = after or before
-            local outward = after ~= nil and -ROUTE_HALF_WIDTH or ROUTE_HALF_WIDTH
-            offsetX, offsetZ = -direction.z * ROUTE_HALF_WIDTH, direction.x * ROUTE_HALF_WIDTH
-            x, z = point.x + direction.x * outward, point.z + direction.z * outward
-        end
         edges[index] = {
-            left = Vector3.new(x + offsetX, 0, z + offsetZ), right = Vector3.new(x - offsetX, 0, z - offsetZ),
+            left = Vector3.new(leftX[index], 0, leftZ[index]), right = Vector3.new(rightX[index], 0, rightZ[index]),
         }
     end
     return edges
@@ -503,9 +467,9 @@ local function routePoints(tiles, origin, upTo)
     return positions
 end
 
--- The route last asked for, as a key. The map redraws its routes whenever the forest changes, and the key is kept
--- through trimming, so the same route asked for again (a redraw while the player follows it) leaves the trimmed
--- ribbon alone instead of remaking it.
+-- The route last asked for, as a key. The route is worked out again whenever the forest changes, and the key is kept
+-- through trimming, so the same route asked for again (while the player follows it) leaves the trimmed ribbon alone
+-- instead of remaking it.
 local routeShownKey = nil
 
 -- Returns a new entity for the route on its origin tile, in its style.
@@ -613,7 +577,7 @@ end
 function Highlights.clear()
     Highlights.showRoute(nil)
     for name, highlight in pairs(shown) do destroyHighlight(name, highlight) end
-    shapes, heldShown = {}, {}
+    shapes = {}
 end
 
 return Highlights

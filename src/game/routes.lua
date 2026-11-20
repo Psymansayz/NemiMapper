@@ -165,18 +165,21 @@ end
 -- For the solving plan (src/game/solve_plan.lua), which searches from many places.
 Routes.search, Routes.tilesRound, Routes.nearest = search, tilesRound, nearest
 
--- Returns the route from the start of found (a search) to the nearest of targetTiles.
+-- Returns the route from the start of found (a search) to the nearest of targetTiles, and the target it reaches.
 function Routes.routeFrom(found, targetTiles)
     local tiles = {}
     for _, target in ipairs(targetTiles) do
-        for _, tile in ipairs(tilesRound(found.grid, target)) do tiles[#tiles + 1] = tile end
+        for _, tile in ipairs(tilesRound(found.grid, target)) do
+            tile.target = target
+            tiles[#tiles + 1] = tile
+        end
     end
-    local best, bestDistance = nearest(found, tiles)
+    local best = nearest(found, tiles)
     if best == nil then return nil end
-    return straightPieces(wayBack(found, best.index)), bestDistance
+    return straightPieces(wayBack(found, best.index)), best.target
 end
 
--- Returns the route from from to the nearest of targetTiles, avoiding blocked.
+-- Returns the route from from to the nearest of targetTiles, avoiding blocked, and the target it reaches.
 function Routes.routeTo(grid, from, targetTiles, blocked)
     return Routes.routeFrom(search(grid, { from }, blocked), targetTiles)
 end

@@ -5,8 +5,8 @@ local IconSizes = require("src/data/icon_sizes")
 local Colours = require("src/ui/colours")
 local ForestFeatures = require("src/data/forest_features")
 local Forest = require("src/game/forest")
-local GameIds = require("src/game/game_ids")
 local Routes = require("src/game/routes")
+local RibbonEdges = require("src/game/ribbon_edges")
 local ForestStops = require("src/game/forest_stops")
 local RouteChoice = require("src/game/route_choice")
 local ToolsHeld = require("src/game/tools_held")
@@ -25,7 +25,7 @@ local PUZZLE_LEGEND_HEIGHT = 66
 local SIMPLE_PUZZLE_LEGEND_HEIGHT = 40 -- with no names under the pictures
 -- Simplified legends show the game's paths icon on NAVIGATE and SOLVE instead of their words, so neither button's
 -- text sets a least width.
-local PATHS_ICON_SPRITE = GameIds.resolve("Sprite", "RS3_ICON_MENU_PATHS_0")
+local PATHS_ICON_SPRITE = id.Sprite.RS3_ICON_MENU_PATHS_0
 local SIMPLE_SOLVE_BUTTON_WIDTH = SIMPLE_PUZZLE_LEGEND_HEIGHT -- a square column for the icon
 local SIMPLE_PAIR_LEAST_WIDTH = 40 -- a puzzle cell holding only its key's picture
 -- The legend's width follows the map's, as on the pack's frame (280 beside 685), within limits. Its fonts follow it.
@@ -36,12 +36,12 @@ local PACK_MAP_SIZE = 685 -- the pack's map width, at which the icons are drawn 
 local ZONE_SIZE = 8 -- tiles
 -- The game's compass, layered like the minimap's: the ring, with the backing and needle on top. The minimap's needle
 -- component draws COMPASSMASK_2, which is only the mask COMPASS is drawn through and shows nothing alone.
-local COMPASS_BACKING_SPRITE = GameIds.resolve("Sprite", "NAVIGATION_BACKING_COMPASS")
-local COMPASS_SPRITE = GameIds.resolve("Sprite", "COMPASS")
+local COMPASS_BACKING_SPRITE = id.Sprite.NAVIGATION_BACKING_COMPASS
+local COMPASS_SPRITE = id.Sprite.COMPASS
 -- PrettyUI's window background, tiled behind the legend row of a node absent from this forest but claimed today, so
 -- it stands apart from the red rows still to claim.
-local WINDOW_BACKGROUND_SPRITE = GameIds.resolve("Sprite", "RS3_MODAL_WINDOW_CONTENT_TILE")
-local COMPASS_RING_SPRITE = GameIds.resolve("Sprite", "RS3_MINIMAP_CLASSIC_RING_41PX") -- the minimap's ring
+local WINDOW_BACKGROUND_SPRITE = id.Sprite.RS3_MODAL_WINDOW_CONTENT_TILE
+local COMPASS_RING_SPRITE = id.Sprite.RS3_MINIMAP_CLASSIC_RING_41PX -- the minimap's ring
 local COMPASS_SIZE = 50 -- as on the pack's frame, over the corner of the frame and map
 -- Sprite sizes in the cache: ring 41, backing 33, COMPASS 51. The game shows COMPASS at full size through a 33 mask,
 -- so drawing it at 33 would make the needle too small; all three are centred and scaled together.
@@ -90,8 +90,7 @@ MapWindow.onSharingToggled = nil -- called when the title bar's sharing button i
 local function boldFonts(sizes)
     local fonts = {}
     for _, size in ipairs(sizes) do
-        local fontID = GameIds.resolve("Font", "MUSEO_SANS_" .. size .. "PT_BOLD")
-        if fontID ~= nil then fonts[#fonts + 1] = { id = fontID, size = size } end
+        fonts[#fonts + 1] = { id = id.Font["MUSEO_SANS_" .. size .. "PT_BOLD"], size = size }
     end
     fonts[#fonts + 1] = { id = SMALL_FONT, size = 11 }
     return fonts
@@ -101,12 +100,11 @@ local NAME_FONTS = boldFonts({ 24, 21, 19, 17, 15, 13 })
 local NAME_TO_ROW = 0.5 -- a name's font is at most this share of its row, so it grows with the legend
 
 -- The open window, or nil. It holds the window, its components' last written state, the content size and the
--- frame's layout. build() makes the frame's components and is not run when the pictures are missing. The map draws
--- the route chosen (src/game/route_choice.lua), or the final route when none is chosen.
+-- frame's layout. The map draws the route chosen (src/game/route_choice.lua), or the final route when none is chosen.
 local parts = nil
 local showLegendStates -- defined below
 
--- Values worked out once per redraw: the view, the tools held, the puzzle pairs and the legends shown.
+-- Values worked out once per redraw: the view, the puzzle pairs and the legends shown.
 local redraw = {}
 local function newRedraw()
     redraw = {}
@@ -114,17 +112,12 @@ end
 
 -- Returns a picture by its file name, with or without the extension.
 local function picture(name)
-    local resources = Plugin.resources
-    return resources and (resources[name] or resources[name .. ".png"])
+    return Plugin.resources[name] or Plugin.resources[name .. ".png"]
 end
 
 local function isOpen()
     if parts ~= nil and ui.Interfaces:GetInterface(parts.window.interfaceID) == nil then parts = nil end
     return parts ~= nil
-end
-
-local function isLaidOut()
-    return isOpen() and parts.frame ~= nil
 end
 
 local function create(componentType, parent)
@@ -148,8 +141,7 @@ end
 -- Adds the game sprite spriteID to parent.
 local function addGameSprite(parent, spriteID)
     local sprite = create(ui.Sprite, parent)
-    sprite.spriteID = spriteID or -1
-    sprite.hidden = spriteID == nil
+    sprite.spriteID = spriteID
     return sprite
 end
 
@@ -201,17 +193,14 @@ end
 local function setButtonBox(button, left, top, width, height)
     setBox(button.cell, left, top, width, height)
     setBox(button.text, left, top, width, height)
-    if button.icon ~= nil then
-        local size = math.max(1, math.min(width, height) - 8)
-        setBox(button.icon, left + (width - size) / 2, top + (height - size) / 2, size, size)
-    end
+    local size = math.max(1, math.min(width, height) - 8)
+    setBox(button.icon, left + (width - size) / 2, top + (height - size) / 2, size, size)
 end
 
 local function showButtonParts(button, isShown, simple)
-    local iconShown = simple and button.icon ~= nil
     setHidden(button.cell, not isShown)
-    setHidden(button.text, not isShown or iconShown)
-    if button.icon ~= nil then setHidden(button.icon, not isShown or not iconShown) end
+    setHidden(button.text, not isShown or simple)
+    setHidden(button.icon, not isShown or not simple)
 end
 
 -- The game's compass sprites are off centre, so they are inset by COMPASS_INSET.
@@ -275,21 +264,18 @@ local function placeZones()
         local sprite = shown.sprite
         if shown.zone ~= zone then
             shown.zone, shown.angle = zone, nil
-            shown.picture = picture("zone_" .. zone.templateKey)
-            if shown.picture ~= nil then sprite.sprite = shown.picture end
+            sprite.sprite = picture("zone_" .. zone.templateKey)
         end
-        setHidden(sprite, shown.picture == nil)
-        if shown.picture ~= nil then
-            local left, bottom = tileOnMap(zone.x, zone.z)
-            local right, top = tileOnMap(zone.x + ZONE_SIZE, zone.z + ZONE_SIZE)
-            -- The grid turns clockwise, but in this client a positive sprite angle turns anticlockwise.
-            local angle = (4 - (turns and turns[index] or 0)) % 4 * 90
-            if shown.angle ~= angle then
-                shown.angle = angle
-                sprite.rotationDegrees = angle
-            end
-            setBox(sprite, left, top, right - left, bottom - top)
+        setHidden(sprite, false)
+        local left, bottom = tileOnMap(zone.x, zone.z)
+        local right, top = tileOnMap(zone.x + ZONE_SIZE, zone.z + ZONE_SIZE)
+        -- The grid turns clockwise, but in this client a positive sprite angle turns anticlockwise.
+        local angle = (4 - (turns and turns[index] or 0)) % 4 * 90
+        if shown.angle ~= angle then
+            shown.angle = angle
+            sprite.rotationDegrees = angle
         end
+        setBox(sprite, left, top, right - left, bottom - top)
     end
     for index = #Forest.zones + 1, #parts.zones do
         parts.zones[index].zone = nil
@@ -298,8 +284,6 @@ local function placeZones()
     parts.zonesShown, parts.zonesTurnedBy = Forest.zones, Forest.zoneTurns
 end
 
-local MITRE_LEAST = 0.001 -- when the normals sum to less than this, the route doubled back and gets no mitre
-local MITRE_LONGEST = 3 -- in half widths; a sharp turn's mitre grows without limit, so it is capped here
 local function pixel(value) return math.floor(value + 0.5) end
 -- Filled on each draw and reused, so drawing a route makes no tables: its points, the direction after each, and
 -- each point's left and right edge points.
@@ -317,39 +301,10 @@ local function drawRoute(tiles, colour, joinsAtStart)
         end
     end
     if count < 2 then return end
-    for position = 1, count - 1 do
-        local stepX, stepY = pointX[position + 1] - pointX[position], pointY[position + 1] - pointY[position]
-        local length = math.sqrt(stepX ^ 2 + stepY ^ 2)
-        directionX[position], directionY[position] = stepX / length, stepY / length
-    end
-    -- Each point's left and right edge points, on whole pixels.
+    RibbonEdges.fill(pointX, pointY, count, half, joinsAtStart, directionX, directionY, leftX, leftY, rightX, rightY)
     for position = 1, count do
-        local hasBefore, hasAfter = position > 1, position < count
-        local beforeX, beforeY = directionX[position - 1], directionY[position - 1]
-        local afterX, afterY = directionX[position], directionY[position]
-        local x, y = pointX[position], pointY[position]
-        local offsetX, offsetY
-        local normalX, normalY, size = 0, 0, 0
-        if hasBefore and hasAfter then
-            normalX, normalY = -beforeY - afterY, beforeX + afterX
-            size = math.sqrt(normalX ^ 2 + normalY ^ 2)
-        end
-        if size > MITRE_LEAST then
-            -- The mitre lies along the summed normals, far enough to keep each side half a width from the centre.
-            local reach = math.min(half * MITRE_LONGEST, half / ((normalX * -beforeY + normalY * beforeX) / size))
-            offsetX, offsetY = normalX / size * reach, normalY / size * reach
-        elseif hasBefore and hasAfter then
-            -- The route doubled back, so there is no mitre and the incoming piece's sides are kept.
-            offsetX, offsetY = -beforeY * half, beforeX * half
-        else
-            local alongX, alongY = hasAfter and afterX or beforeX, hasAfter and afterY or beforeY
-            offsetX, offsetY = -alongY * half, alongX * half
-            -- An end extends half a width outward, unless it is a start joining another route.
-            local outward = hasAfter and (joinsAtStart and 0 or -half) or half
-            x, y = x + alongX * outward, y + alongY * outward
-        end
-        leftX[position], leftY[position] = pixel(x + offsetX), pixel(y + offsetY)
-        rightX[position], rightY[position] = pixel(x - offsetX), pixel(y - offsetY)
+        leftX[position], leftY[position] = pixel(leftX[position]), pixel(leftY[position])
+        rightX[position], rightY[position] = pixel(rightX[position]), pixel(rightY[position])
     end
     local routes = parts.routes
     for position = 1, count - 1 do
@@ -379,10 +334,10 @@ local function workOutFinalRoute()
     end)
     -- Nodes and location tasks (the Pahtli plant) stay put.
     -- NPC tasks (the Traitor) walk about, so a route worked out once leaves them out.
-    local targets = ForestStops.tilesOfKind("node")
+    local targets = ForestStops.stopsOfKind("node")
     for _, task in ipairs(ForestFeatures.trinksTasks) do
         if task.locations ~= nil then
-            for _, tile in ipairs(ForestStops.tilesOfKind("task", task.key)) do targets[#targets + 1] = tile end
+            for _, tile in ipairs(ForestStops.stopsOfKind("task", task.key)) do targets[#targets + 1] = tile end
         end
     end
     finalRouteOf = { entry = entry, routes = Routes.finalRoute(grid, openings[1] or entry, openings[2], targets) }
@@ -394,15 +349,6 @@ local function finalRoutes()
     if finalRouteOf ~= nil and finalRouteOf.entry == Forest.entryTile then return finalRouteOf.routes end
     if not Forest.isSearching then waitForFinalRoute() end
     return {}
-end
-
--- Returns the tools the player holds, by source key.
--- Worked out once per redraw.
-local function toolsHeld()
-    if redraw.held == nil then
-        redraw.held = Forest.playerTile and ToolsHeld.sourceKeys() or {}
-    end
-    return redraw.held
 end
 
 local placeMarkers, placeSigns -- defined below
@@ -459,7 +405,6 @@ end
 local function paintRoutes()
     parts.routes:Clear()
     local drawn = RouteChoice.drawn
-    parts.routePainted = drawn ~= nil
     showKeysUnseen(drawn and drawn.keysUnseen, drawn and drawn.colour)
     if drawn ~= nil then
         if view().activeRoute then drawRoute(drawn.ahead or drawn.tiles, drawn.colour) end
@@ -481,13 +426,6 @@ local function showRoute()
     paintRoutes()
 end
 
--- Chooses one route, clearing the other choices (RouteChoice.choose), and shows it.
-local function chooseRoute(shown, solving, mapping)
-    RouteChoice.choose(shown, solving, mapping)
-    newRedraw()
-    showRoute()
-end
-
 -- Works out and draws the final route on the next server tick, if the map is still open with the final route on
 -- and nothing chosen in its place.
 local FINAL_ROUTE_SUBSCRIPTION = "nemi_mapper_final_route"
@@ -495,7 +433,7 @@ local FINAL_ROUTE_SUBSCRIPTION = "nemi_mapper_final_route"
 waitForFinalRoute = function()
     Event.ServerLogic.Subscribe(FINAL_ROUTE_SUBSCRIPTION, function()
         Event.ServerLogic.Unsubscribe(FINAL_ROUTE_SUBSCRIPTION)
-        if not isLaidOut() then return end
+        if not isOpen() then return end
         newRedraw()
         if Forest.grid ~= nil and Forest.entryTile ~= nil and not Forest.isSearching and view().finalRoute
             and not RouteChoice.isChosen() then
@@ -530,8 +468,7 @@ end
 
 -- Chooses a legend row's, map icon's or entrance sign's route, or drops it on a second click.
 local function toggleRoute(key)
-    if not canChooseRoute() then return end
-    chooseRoute(RouteChoice.shown ~= key and key or nil, false, false)
+    if canChooseRoute() then RouteChoice.toggle(key) end
 end
 
 -- Makes a map sprite choose its route when clicked and grow when hovered.
@@ -555,7 +492,7 @@ end
 
 -- Places one sprite per found feature shown, kept and reused in drawing order.
 placeMarkers = function()
-    local shown, held = 0, toolsHeld()
+    local shown, held = 0, ToolsHeld.held
     local unneeded = view().unneededPuzzles and {} or ForestStops.unneededNow(held)
     parts.stopsShown = RouteChoice.drawn and RouteChoice.drawn.stops or EMPTY
     for _, entry in ipairs(Forest.found) do
@@ -717,7 +654,7 @@ local function showCounts()
         showLabel(row.name, row, isUnseen, isUnseen and KEY_UNSEEN_NAME or row.nameText, isDimmed and not isUnseen)
     end
     showLegendStates()
-    local keyUnseen, held = {}, toolsHeld()
+    local keyUnseen, held = {}, ToolsHeld.held
     for _, toolPair in ipairs(Forest.keysUnseen()) do keyUnseen[toolPair] = true end
     for _, pair in ipairs(parts.puzzlePairs) do
         local toolPair = pair.toolPair
@@ -747,7 +684,7 @@ local function shownPuzzlePairs()
     local shown = parts.puzzlePairs
     local shows = view()
     if shows.puzzleLegend and not shows.unneededPairs and Forest.bounds ~= nil then
-        local held = toolsHeld()
+        local held = ToolsHeld.held
         local unneeded, needed = ForestStops.unneededNow(held), {}
         for _, entry in ipairs(Forest.found) do
             local feature = entry.feature
@@ -767,7 +704,7 @@ end
 -- Returns the puzzles shown in the legend, marking the keys held whose cells show their doors' pictures in a
 -- simplified legend, as a string to notice a change by.
 local function shownPairsKey()
-    local held = view().simpleLegends and parts.puzzleShown and toolsHeld() or EMPTY
+    local held = view().simpleLegends and parts.puzzleShown and ToolsHeld.held or EMPTY
     local keys = {}
     for _, pair in ipairs(shownPuzzlePairs()) do
         local key = pair.toolPair.source.key
@@ -799,8 +736,7 @@ local PUZZLE_WINDOW_LEAST_WIDTH = EDGE + MINIMUM_MAP_SIZE
 -- A simplified legend is as wide as its NAVIGATE button, inside the legend's border.
 local function legendMinimumWidth()
     if not view().simpleLegends then return LEGEND_MINIMUM_WIDTH end
-    return PATHS_ICON_SPRITE ~= nil and MAP_ROUTE_HEIGHT + 2
-        or config.Font.FromID(TEXT_FONT):GetStringWidth("NAVIGATE") + 18
+    return MAP_ROUTE_HEIGHT + 2
 end
 
 -- Returns whether the node legend shows a feature's row.
@@ -927,19 +863,14 @@ local function showForest()
     showFound()
 end
 
--- Updates the map as needed if the held tools change, and returns whether they did.
-local function showHeldChange()
-    local held = toolsHeld()
-    if ForestStops.sameSet(held, parts.heldShown) then return false end
-    parts.heldShown = held
+-- Updates the map for a change in the tools held. The chosen route follows by MapWindow.showRoutes.
+local function showHeld()
     if needsLayout() then
         layoutFitting()
     else
         placeMarkers()
         showCounts()
-        paintRoutes()
     end
-    return true
 end
 
 -- Writes a button's colours only when they change.
@@ -955,8 +886,9 @@ local function showButton(button, isDown)
     end
 end
 
--- Draws the dividers between the node legend's rows and between its two lists.
+-- Draws the node legend's border and the dividers between its rows and between its two lists.
 local function drawNodeOverlay(canvas, box)
+    canvas:AddOutline(box.left, box.top, box.width, box.height, 1, FRAME_LINE_COLOUR)
     for _, lineY in ipairs(box.lines) do
         canvas:AddLine(box.left + LEGEND_LINE_INSET, lineY, box.left + box.width - LEGEND_LINE_INSET, lineY, 1,
             FRAME_LINE_COLOUR)
@@ -978,23 +910,17 @@ local function drawPuzzleOverlay(canvas, box)
     end
 end
 
--- Draws the frame's panels and outlines, with the node legend's border while the legend is in the frame, and the
--- legends' arrows and dividers on an overlay above the cells in the frame, as the cells would cover them if drawn
--- under.
+-- Draws the frame's panels and outlines, and the legends' borders, arrows and dividers on an overlay above the cells
+-- in the frame, as the cells would cover them if drawn under.
 local function drawFrame()
     local canvas, frame = parts.chrome, parts.frame
-    local nodeInFrame = parts.legendShown and parts.nodeHost.window == nil
     canvas:Clear()
     canvas:AddRectangle(frame.left, frame.top, frame.width, frame.height, FRAME_COLOUR)
     canvas:AddOutline(frame.left, frame.top, frame.width, frame.height, 2, FRAME_LINE_COLOUR)
     canvas:AddOutline(frame.mapLeft - 2, frame.mapTop - 2, frame.mapSize + 4, frame.mapSize + 4, 2, FRAME_LINE_COLOUR)
-    if nodeInFrame then
-        local box = parts.nodeBox
-        canvas:AddOutline(box.left, box.top, box.width, box.height, 1, FRAME_LINE_COLOUR)
-    end
     parts.overlay:Clear()
     if parts.puzzleShown and parts.puzzleHost.window == nil then drawPuzzleOverlay(parts.overlay, parts.puzzleBox) end
-    if nodeInFrame then drawNodeOverlay(parts.overlay, parts.nodeBox) end
+    if parts.legendShown and parts.nodeHost.window == nil then drawNodeOverlay(parts.overlay, parts.nodeBox) end
 end
 
 -- Outlines the cell whose route is drawn, covers the rows of absent nodes, and shows the buttons pressed or not.
@@ -1006,7 +932,7 @@ function showLegendStates()
     for _, row in ipairs(parts.legendRows) do
         setHidden(row.outline, not row.isShown or row.feature.key ~= RouteChoice.shown)
         setHidden(row.missing, not row.isShown or not row.isNeeded)
-        if row.claimedBackground ~= nil then
+        if row.claimedBackground ~= nil then -- (nodes only)
             setHidden(row.claimedBackground, not row.isShown or not row.isClaimedAbsent)
         end
     end
@@ -1097,7 +1023,7 @@ local function layoutPuzzleLegend(box)
     -- The pictures take the height above the names (40 in the frame), or all of it when simplified.
     local iconHeight = simple and height - 8 or math.max(40, height - TEXT_HEIGHT - 6)
     box.simple, box.arrowY = simple, top + 4 + iconHeight / 2
-    local solveWidth = simple and PATHS_ICON_SPRITE ~= nil and SIMPLE_SOLVE_BUTTON_WIDTH or SOLVE_BUTTON_WIDTH
+    local solveWidth = simple and SIMPLE_SOLVE_BUTTON_WIDTH or SOLVE_BUTTON_WIDTH
     -- Only the puzzles shown take a cell; the others are hidden.
     local shownPairs = shownPuzzlePairs()
     parts.shownPairsKey = shownPairsKey()
@@ -1108,7 +1034,7 @@ local function layoutPuzzleLegend(box)
         if not pair.isShown then setAllHidden(true, pair.cell, pair.source, pair.barrier, pair.label, pair.outline) end
     end
     -- A simplified cell shows its key's picture, or its door's while the key is held, matching the full legend's name.
-    local held = toolsHeld()
+    local held = ToolsHeld.held
     box.pairCount = math.max(1, #shownPairs)
     box.pairWidth = (box.width - EDGE - solveWidth) / box.pairCount
     box.cellsRight = box.left + box.width - solveWidth
@@ -1155,10 +1081,8 @@ local function layoutPuzzleLegend(box)
     parts.puzzleBox = box
 end
 
--- Lays out a legend in its own window (host): the frame's colour behind it, the node legend's border, and its
--- overlay.
+-- Lays out a legend in its own window (host): the frame's colour behind it, and its overlay.
 local function layoutPopped(host)
-    if parts.frame == nil then return end
     local root = host.window.root
     local box = { left = 0, top = 0, width = root.width - WINDOW_EDGE_WIDTH, height = root.height - WINDOW_EDGE_HEIGHT }
     host.chrome:Clear()
@@ -1166,7 +1090,6 @@ local function layoutPopped(host)
     host.overlay:Clear()
     if host == parts.nodeHost then
         layoutNodeLegend(box)
-        host.chrome:AddOutline(box.left, box.top, box.width, box.height, 1, FRAME_LINE_COLOUR)
         drawNodeOverlay(host.overlay, box)
     else
         layoutPuzzleLegend(box)
@@ -1207,16 +1130,15 @@ local function showPoppedWindows()
 end
 
 -- Lays the frame out in the window's content, contentWidth by contentHeight.
-local function layout(contentWidth, contentHeight, isResize)
+local function layout(contentWidth, contentHeight)
     -- A part shown again (the puzzle legend in a new forest, the header in map sharing mode) can raise the minimum.
-    -- The window then grows to it, and SetSize lays it out again, as a resize only if this layout was one.
+    -- The window then grows to it, and SetSize lays it out again.
     local minimumWidth, minimumHeight = fittedWindowSize(MINIMUM_MAP_SIZE)
     if parts.window.minWidth ~= minimumWidth or parts.window.minHeight ~= minimumHeight then
         setMinimumSize(parts.window, minimumWidth, minimumHeight)
         local windowWidth, windowHeight = contentWidth + WINDOW_EDGE_WIDTH, contentHeight + WINDOW_EDGE_HEIGHT
         if windowWidth < minimumWidth or windowHeight < minimumHeight then
-            return parts.window:SetSize(math.max(windowWidth, minimumWidth), math.max(windowHeight, minimumHeight),
-                isResize == true)
+            return parts.window:SetSize(math.max(windowWidth, minimumWidth), math.max(windowHeight, minimumHeight))
         end
     end
     parts.contentWidth, parts.contentHeight = contentWidth, contentHeight
@@ -1296,7 +1218,7 @@ local function layout(contentWidth, contentHeight, isResize)
     -- A puzzle legend window's least size follows the simplified legends setting, and the window grows to it.
     if puzzlePopped then
         local window = parts.puzzleHost.window
-        local leastWidth = shows.simpleLegends and PATHS_ICON_SPRITE ~= nil
+        local leastWidth = shows.simpleLegends
             and math.max(1, #shownPuzzlePairs()) * SIMPLE_PAIR_LEAST_WIDTH + EDGE + SIMPLE_SOLVE_BUTTON_WIDTH
                 + WINDOW_EDGE_WIDTH
             or PUZZLE_WINDOW_LEAST_WIDTH
@@ -1427,7 +1349,7 @@ local function build(nodeWindow, puzzleWindow)
         end)
         button.cell:Subscribe(ui.Hook.ONMOUSELEAVE, function() showButton(button, button.isDown) return true end)
         button.text = addText(content, TEXT_FONT, TEXT_COLOUR, ui.AlignMode.CENTRE, label)
-        if PATHS_ICON_SPRITE ~= nil then button.icon = addGameSprite(content, PATHS_ICON_SPRITE) end
+        button.icon = addGameSprite(content, PATHS_ICON_SPRITE)
         return button
     end
 
@@ -1444,7 +1366,7 @@ local function build(nodeWindow, puzzleWindow)
             local function cannotRoute() return not row.canRoute end
             row.cell = addCell(content, feature.key, cannotRoute)
             -- over the cell, under the row's picture and name
-            if feature.kind == "node" and WINDOW_BACKGROUND_SPRITE ~= nil then
+            if feature.kind == "node" then
                 row.claimedBackground = addGameSprite(content, WINDOW_BACKGROUND_SPRITE)
                 row.claimedBackground.isTiling = true
             end
@@ -1452,11 +1374,8 @@ local function build(nodeWindow, puzzleWindow)
             -- centred between the icon and the skill symbol
             row.name = addText(content, TEXT_FONT, TEXT_COLOUR, ui.AlignMode.CENTRE, row.nameText)
             -- the game's skill icons; the SKILL_<skill> sprites are the daily tasks' set, not these
-            local skillSprite = feature.skill
-                and GameIds.resolve("Sprite", "HITMARK_ICON_SKILL_" .. feature.skill:upper())
-            if skillSprite ~= nil then
-                row.skill = create(ui.Sprite, content)
-                row.skill.spriteID = skillSprite
+            if feature.skill ~= nil then
+                row.skill = addGameSprite(content, id.Sprite["HITMARK_ICON_SKILL_" .. feature.skill:upper()])
             end
             -- covers the row of a node that is absent but still unclaimed today
             row.missing = create(ui.Rectangle, content)
@@ -1469,7 +1388,7 @@ local function build(nodeWindow, puzzleWindow)
     end
     -- The buttons' plans need the player in the forest, so they do nothing outside it.
     parts.mapRouteButton = addButton(content, "NAVIGATE", function()
-        if Forest.isInside then chooseRoute(nil, false, not RouteChoice.mapping) end
+        if Forest.isInside then RouteChoice.choose(nil, false, not RouteChoice.mapping) end
     end)
     if nodeWindow ~= nil then parts.nodeHost.overlay = create(ui.Canvas, content) end
 
@@ -1491,7 +1410,7 @@ local function build(nodeWindow, puzzleWindow)
     -- The frame's overlay covers the legends in the frame, so it is made after them.
     parts.overlay = create(ui.Canvas, parts.window.content)
     parts.solveButton = addButton(content, "SOLVE", function()
-        if Forest.isInside then chooseRoute(nil, not RouteChoice.solving, false) end
+        if Forest.isInside then RouteChoice.choose(nil, not RouteChoice.solving, false) end
     end)
 end
 
@@ -1507,13 +1426,11 @@ local POPPED_WINDOWS = {
         under = true, minWidth = PUZZLE_WINDOW_LEAST_WIDTH }, -- openPopped sets its height
 }
 
--- Saves the window's place, destroys the sharing button and its legends' own windows, and forgets it.
--- The window's Destroy takes its own components; the sharing button sits beside it, so it is destroyed here.
+-- Saves the window's place, destroys its legends' own windows, and forgets it.
 local function release()
     WindowPlace.remember(parts.window.root, "map")
-    if parts.sharingButton ~= nil then parts.sharingButton:destroy() end
     for _, popped in ipairs(POPPED_WINDOWS) do
-        local window = parts[popped.host] and parts[popped.host].window
+        local window = parts[popped.host].window
         if window ~= nil then
             WindowPlace.remember(window.root, popped.place)
             window:Destroy()
@@ -1529,7 +1446,8 @@ end
 local function framePartsShown()
     return (parts.headerShown and "header " or "")
         .. (parts.legendShown and parts.nodeHost.window == nil and "node " or "")
-        .. (parts.puzzleShown and parts.puzzleHost.window == nil and "puzzle" or "")
+        .. (parts.puzzleShown and parts.puzzleHost.window == nil and "puzzle " or "")
+        .. (parts.simpleShown and "simple" or "")
 end
 
 -- Fits the window to the frame around a map of mapSize, within the plugin layer.
@@ -1550,7 +1468,7 @@ end
 -- Fits the window to the frame once a resize ends, so no background shows.
 -- Draw is watched only during a drag.
 local function fitAfterResize()
-    if not isLaidOut() then return Event.Draw.Unsubscribe(RESIZE_END_SUBSCRIPTION) end
+    if not isOpen() then return Event.Draw.Unsubscribe(RESIZE_END_SUBSCRIPTION) end
     if parts.window.resize.dragState ~= nil then return end
     Event.Draw.Unsubscribe(RESIZE_END_SUBSCRIPTION)
     fitWindowTo(parts.frame.mapSize)
@@ -1562,7 +1480,7 @@ local function rebuild()
     local mapSize, PrettyUI, pluginLayer = parts.frame.mapSize, parts.PrettyUI, parts.pluginLayer
     MapWindow.close()
     MapWindow.open(PrettyUI, pluginLayer)
-    if isLaidOut() then fitWindowTo(mapSize) end
+    fitWindowTo(mapSize)
 end
 
 -- Shrinks or grows the legends' own windows with their legends when simplified legends are turned on or off.
@@ -1579,7 +1497,7 @@ local function fitPoppedWindows(puzzleSize)
     window = parts.puzzleHost.window
     if window ~= nil then
         local sign = simple and -1 or 1
-        local widthChange = PATHS_ICON_SPRITE ~= nil and SOLVE_BUTTON_WIDTH - SIMPLE_SOLVE_BUTTON_WIDTH or 0
+        local widthChange = SOLVE_BUTTON_WIDTH - SIMPLE_SOLVE_BUTTON_WIDTH
         window:SetSize(math.max(window.minWidth, puzzleSize[1] + sign * widthChange),
             math.max(window.minHeight, puzzleSize[2] + sign * (PUZZLE_LEGEND_HEIGHT - SIMPLE_PUZZLE_LEGEND_HEIGHT)))
     end
@@ -1601,21 +1519,19 @@ local function openPopped(popped)
     local x, y, width, height = WindowPlace.restore(pluginLayer, popped.place, popped.width, defaultHeight, nil,
         besideX, besideY)
     local window = parts.PrettyUI.Window.new(pluginLayer, {
-        title = popped.title, x = x, y = y, width = width, height = height,
+        categoryID = "auto", title = popped.title, x = x, y = y, width = width, height = height,
         minWidth = popped.minWidth, minHeight = minimumHeight,
         resizable = true, scrollable = false,
     })
     window.Close = function(closingWindow)
         hideWindow(closingWindow)
-        if parts == nil then return end
         parts.closedPopped[closingWindow] = true
         if parts.window.root.hidden == true and not legendWindowShown() then MapWindow.close() end
     end
     local setWindowSize = window.SetSize
     window.SetSize = function(resizedWindow, newWidth, newHeight)
         setWindowSize(resizedWindow, newWidth, newHeight)
-        local host = parts ~= nil and parts[popped.host]
-        if host then layoutPopped(host) end
+        layoutPopped(parts[popped.host])
     end
     return window
 end
@@ -1626,18 +1542,17 @@ function MapWindow.open(PrettyUI, pluginLayer)
         parts.window:Show()
         -- Opening the map again brings back the legend windows closed since.
         parts.closedPopped = {}
-        if parts.frame ~= nil then showPoppedWindows() end
+        showPoppedWindows()
         return
     end
     newRedraw()
     local minimumWidth, minimumHeight = fittedWindowSize(MINIMUM_MAP_SIZE)
     local defaultWidth, defaultHeight = fittedWindowSize(DEFAULT_MAP_SIZE)
     local x, y, width, height = WindowPlace.restore(pluginLayer, "map", defaultWidth, defaultHeight)
-    local hasPictures = picture("chest") ~= nil
     local window = PrettyUI.Window.new(pluginLayer, {
-        title = "Nemi Forest map", x = x, y = y, width = width, height = height,
+        categoryID = "auto", title = "Nemi Forest map", x = x, y = y, width = width, height = height,
         minWidth = minimumWidth, minHeight = minimumHeight,
-        resizable = hasPictures, scrollable = false, destroyOnClose = true,
+        resizable = true, scrollable = false, destroyOnClose = true,
         onClose = release, -- on the X; the window then destroys itself
     })
     parts = { window = window, hiddenOf = {}, boxOf = {}, textWidths = {}, closedPopped = {}, stopsShown = EMPTY,
@@ -1645,33 +1560,26 @@ function MapWindow.open(PrettyUI, pluginLayer)
     -- The X only hides the map while a legend's own window is shown, so that window stays open until its own X.
     local closeWindow = window.Close
     window.Close = function(closingWindow)
-        if parts ~= nil and legendWindowShown() then hideWindow(closingWindow) else closeWindow(closingWindow) end
+        if not legendWindowShown() then return closeWindow(closingWindow) end
+        hideWindow(closingWindow)
     end
-    parts.sharingButton = SharingButton.add(window, pluginLayer, function() return parts ~= nil end,
-        function() MapWindow.onSharingToggled() end)
-    if not hasPictures then
-        window:AddText("The map pictures are not loaded. Run plugins_scan in the client console, then reload "
-            .. "the plugin.")
-        return
-    end
+    parts.sharingButton = SharingButton.add(PrettyUI, window, function() MapWindow.onSharingToggled() end)
     local shows = view()
     build(shows.nodeLegendPopped and openPopped(POPPED_WINDOWS[1]) or nil,
         shows.puzzleLegendPopped and openPopped(POPPED_WINDOWS[2]) or nil)
     -- A window's content takes its new size a moment after a resize, so the layout uses the size passed to
     -- SetSize, which PrettyUI's resize handle calls on each step of a drag.
     local setWindowSize = window.SetSize
-    -- asResize is false for layout's own growth to a new minimum; PrettyUI's resize handle passes nothing.
-    window.SetSize = function(resizedWindow, newWidth, newHeight, asResize)
+    window.SetSize = function(resizedWindow, newWidth, newHeight)
         setWindowSize(resizedWindow, newWidth, newHeight)
         layout(math.max(resizedWindow.minWidth, math.floor(newWidth)) - WINDOW_EDGE_WIDTH,
-            math.max(resizedWindow.minHeight, math.floor(newHeight)) - WINDOW_EDGE_HEIGHT, asResize ~= false)
+            math.max(resizedWindow.minHeight, math.floor(newHeight)) - WINDOW_EDGE_HEIGHT)
         if resizedWindow.resize.dragState ~= nil then
             Event.Draw.Subscribe(RESIZE_END_SUBSCRIPTION, fitAfterResize)
         end
     end
     -- PrettyUI clamps the window to its minimum, so the layout takes the size the window got.
     layout(window.root.width - WINDOW_EDGE_WIDTH, window.root.height - WINDOW_EDGE_HEIGHT)
-    parts.heldShown = toolsHeld()
     -- The saved size was fitted to the frame as it was. Settings changed since (a legend hidden, the header) would
     -- leave background around the map, so the window is fitted around the map as laid out now.
     fitWindowTo(parts.frame.mapSize)
@@ -1679,52 +1587,43 @@ end
 
 -- Called when the forest changes: a find, a claim, a follower, the grid or the search ending.
 function MapWindow.showForest()
-    if isLaidOut() then showForest() end
+    if isOpen() then showForest() end
 end
 
--- Called when a found NPC (entry) moves: its marker follows, and so does a route leading to it.
-function MapWindow.showNpcMoved(entry)
-    if not isLaidOut() then return end
+-- Called when a found NPC moves: its marker follows. A route to it follows by MapWindow.showRoutes.
+function MapWindow.showNpcMoved()
+    if not isOpen() then return end
     newRedraw()
     placeMarkers()
-    if RouteChoice.drawn ~= nil and RouteChoice.drawn.target == entry then paintRoutes() end
 end
 
--- Called when the backpack or worn items change without a step: only the tools held can have
--- changed what the map shows.
-function MapWindow.showInventory()
-    if not isLaidOut() then return end
+-- Called when the tools held change without a step.
+function MapWindow.showHeld()
+    if not isOpen() then return end
     newRedraw()
-    showHeldChange()
+    showHeld()
 end
 
 -- Called when the forest is left: it is gone, so the map shows none entered.
 function MapWindow.showForestLeft()
     finalRouteOf = nil
-    if isLaidOut() then showForest() end
+    if isOpen() then showForest() end
 end
 
--- Called when the player's tile changes: the player marker and the routes follow.
-function MapWindow.showPlayer()
-    if not isLaidOut() then return end
+-- Called when the player's tile changes: the player marker follows, and the map follows the tools held if they
+-- changed (heldChanged). The chosen route follows by MapWindow.showRoutes.
+function MapWindow.showPlayer(heldChanged)
+    if not isOpen() then return end
     newRedraw()
     showPlayer()
-    if not showHeldChange() then
-        -- A route drawn may have ended (its plan done); the final route starts at the opening nearer the player's
-        -- first tile, so it waits for a step.
-        if RouteChoice.isChosen() or parts.routePainted then
-            showRoute()
-        elseif view().finalRoute and (finalRouteOf == nil or finalRouteOf.entry ~= Forest.entryTile) then
-            paintRoutes()
-        end
-    end
+    if heldChanged then showHeld() end
     -- The world is readable only while the friends list is open, so it is checked on each step until known.
     if parts.world == nil and Forest.bounds ~= nil and WorldNumber.read() ~= nil then showCountText() end
 end
 
--- Called when the route chosen or a route setting changes outside the map.
+-- Called when the route chosen or drawn changes (RouteChoice.onDrawn).
 function MapWindow.showRoutes()
-    if not isLaidOut() then return end
+    if not isOpen() then return end
     newRedraw()
     showRoute()
 end
@@ -1739,14 +1638,14 @@ local function showHeaderText()
 end
 
 function MapWindow.showHeaderText()
-    if isLaidOut() then showHeaderText() end
+    if isOpen() then showHeaderText() end
 end
 
 -- Called when a map display setting changes.
 -- The legends, header and buttons may come or go, so the frame is laid out again.
 function MapWindow.showSettings()
-    if not isLaidOut() then return end
-    if parts.sharingButton ~= nil then parts.sharingButton:show() end
+    if not isOpen() then return end
+    parts.sharingButton:show()
     showHeaderText()
     newRedraw()
     local shows = view()
@@ -1754,15 +1653,12 @@ function MapWindow.showSettings()
     if shows.nodeLegendPopped ~= (nodeWindow ~= nil) or shows.puzzleLegendPopped ~= (puzzleWindow ~= nil) then
         return rebuild()
     end
-    local wasSimple, mapSize = parts.simpleShown, parts.frame.mapSize
+    local wasSimple = parts.simpleShown
     local puzzleRoot = puzzleWindow ~= nil and puzzleWindow.root
     local puzzleSize = puzzleRoot and { puzzleRoot.width, puzzleRoot.height }
-    local fitted = layoutFitting()
-    -- Simplified legends take less room too, so the window and the legends' own windows are fitted to them.
-    if parts.simpleShown ~= wasSimple then
-        if not fitted then fitWindowTo(mapSize) end
-        fitPoppedWindows(puzzleSize)
-    end
+    layoutFitting()
+    -- Simplified legends take less room too, so the legends' own windows are fitted to them.
+    if parts.simpleShown ~= wasSimple then fitPoppedWindows(puzzleSize) end
 end
 
 -- Returns whether the map is open and shown.
