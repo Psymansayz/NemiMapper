@@ -8,7 +8,7 @@ local ModelBounds = {}
 
 local HALF_TILE = 256 -- fine units
 
--- feature -> its box, unturned; the data's table is emptied once converted, as require keeps it for good.
+-- feature -> its box, unturned.
 -- Every location of a feature takes the box of its base location; an NPC's is from the middle of its tile.
 local boxOf = {}
 local function listBoxes(feature)
@@ -20,7 +20,6 @@ for _, toolPair in ipairs(ForestFeatures.tools) do
     listBoxes(toolPair.source)
     listBoxes(toolPair.barrier)
 end
-for name in pairs(Data) do Data[name] = nil end
 
 -- Returns the box round the model of a location of feature turned rotation quarter turns, as the highlight takes it:
 -- { x, X, z, Z, height } in fine units from the centre of its south-west tile. width and length are its size in tiles

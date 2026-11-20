@@ -99,8 +99,6 @@ function Settings.load()
     end
 end
 
-Settings.reset()
-
 -- Called on shutdown and on leaving the game (main.lua).
 function Settings.save()
     for _, switch in ipairs(SWITCHES) do PersistentDB:SetInt(switch[1], Settings[switch[1]] and 1 or 0) end

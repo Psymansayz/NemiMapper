@@ -126,7 +126,7 @@ function ScoutWindow.open(PrettyUI, pluginLayer, onOpenMap)
     local minimumWidth = widthNeeded(PrettyUI, numberWidth, wordsWidth, isBlocking)
     local x, y, width, height = WindowPlace.restore(pluginLayer, "scout", WIDTH, HEIGHT, minimumWidth)
     local window = PrettyUI.Window.new(pluginLayer, {
-        title = "Nemi scout", x = x, y = y, width = width, height = height, destroyOnClose = true,
+        categoryID = "auto", title = "Nemi scout", x = x, y = y, width = width, height = height, destroyOnClose = true,
         resizable = true, minWidth = minimumWidth, minHeight = MINIMUM_HEIGHT,
         onClose = release, -- closing with the X destroys the window itself
     })

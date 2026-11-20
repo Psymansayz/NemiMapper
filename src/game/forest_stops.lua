@@ -41,12 +41,12 @@ local function isMapStop(entry)
     return (feature.kind == "node" and not entry.isUsed) or (feature.kind == "task" and Forest.isTaskActive(feature))
 end
 
--- Returns the found features of a kind as tilesOfEntry gives them.
-function ForestStops.tilesOfKind(kind, key)
+-- Returns the found features of a kind (and key) as stops.
+function ForestStops.stopsOfKind(kind, key)
     local tiles = {}
     for _, entry in ipairs(Forest.found) do
         if entry.feature.kind == kind and (key == nil or entry.feature.key == key) then
-            tiles[#tiles + 1] = tilesOfEntry(entry)
+            tiles[#tiles + 1] = ForestStops.stopOf(entry)
         end
     end
     return tiles
@@ -66,25 +66,12 @@ end
 -- Returns the barriers' tiles, which routes to a tool or barrier do not cross.
 function ForestStops.barrierTiles()
     local blocked = {}
-    for _, barrier in ipairs(ForestStops.tilesOfKind("barrier")) do
+    for _, barrier in ipairs(ForestStops.stopsOfKind("barrier")) do
         for _, tile in ipairs(barrier.tiles) do
             blocked[Forest.grid:index(tile.x, tile.z)] = true
         end
     end
     return blocked
-end
-
--- Returns the feature a route ends at.
-function ForestStops.entryAtEnd(route, kind, key)
-    local last = route[#route]
-    local best, bestDistance = nil, nil
-    for _, entry in ipairs(Forest.found) do
-        if entry.feature.kind == kind and (key == nil or entry.feature.key == key) then
-            local distance = math.max(math.abs(entry.x - 0.5 - last.x), math.abs(entry.z - 0.5 - last.z))
-            if bestDistance == nil or distance < bestDistance then best, bestDistance = entry, distance end
-        end
-    end
-    return best
 end
 
 -- Returns whether two sets (key -> true) hold the same keys: a route's stops by entry, or the tools held by source key.

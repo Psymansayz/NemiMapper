@@ -1,28 +1,20 @@
 -- The button on the map window's title bar that turns map sharing mode on and off.
 
-local GameIds = require("src/game/game_ids")
 local Settings = require("src/data/settings")
 
 local SharingButton = {}
 SharingButton.__index = SharingButton
 
-local SPRITE = GameIds.resolve("Sprite", "RS3_ICON_LOCAL_CHAT_FILTER")
+local SPRITE = id.Sprite.RS3_ICON_LOCAL_CHAT_FILTER
 local SIZE = 20 -- PrettyUI's close button's size
 local LEFT, TOP = 8, 6 -- from the window's corner, like the close button's
 local OFF_ALPHA = 0.45
-local RAISE_SUBSCRIPTION = "nemi_mapper_sharing_raise"
 
-local raised = nil -- the button to raise on the next frame
-
-local function raise()
-    Event.Draw.Unsubscribe(RAISE_SUBSCRIPTION)
-    if raised ~= nil then raised.sprite:MoveToFront() end
-    raised = nil
-end
-
-function SharingButton.add(window, pluginLayer, isShown, onToggle)
-    if SPRITE == nil then return nil end
-    local sprite = ui.Sprite.new(pluginLayer)
+-- The title bar's drag layer is a sibling over the window, so a button inside the window would be covered by it.
+-- The button goes inside the drag layer instead, which hides and raises it with the window's title bar.
+function SharingButton.add(PrettyUI, window, onToggle)
+    local titleDrag = window.titleDrag
+    local sprite = PrettyUI.NewComponent(ui.Sprite, titleDrag)
     sprite.spriteID = SPRITE
     sprite.clickthrough = false
     sprite.enabled = true
@@ -31,28 +23,31 @@ function SharingButton.add(window, pluginLayer, isShown, onToggle)
         onToggle()
         return true
     end)
-    local button = setmetatable({ sprite = sprite, window = window }, SharingButton)
+    local button = setmetatable({ sprite = sprite }, SharingButton)
     button:show()
-    -- PrettyUI places its overlays on every resize step and show, so the position is written only when it moves.
+    -- A title drag stretches the drag layer over the screen, so the button is kept at the window's corner by its
+    -- offset from the layer, written only when it changes.
     local placedX, placedY = nil, nil
     local function place()
-        local x, y = math.floor(window.root.x) + LEFT, math.floor(window.root.y) + TOP
+        local x = math.floor(window.root.x - titleDrag.x) + LEFT
+        local y = math.floor(window.root.y - titleDrag.y) + TOP
         if x == placedX and y == placedY then return end
         placedX, placedY = x, y
         sprite:SetPos(x, y)
     end
-    window:_RegisterOverlay(sprite, isShown, place)
     place()
-    if window.resize ~= nil then
-        local setEnabled = window.resize.SetEnabled
-        window.resize.SetEnabled = function(resize, enabled)
-            setEnabled(resize, enabled)
-            if not enabled then
-                if sprite.hidden ~= true then sprite.hidden = true end
-                raised = button
-                Event.Draw.Subscribe(RAISE_SUBSCRIPTION, raise)
-            end
-        end
+    -- PrettyUI remembers the window's place on each step of a drag, and syncs its overlays once the drag layer is
+    -- back over the title bar.
+    local bounds = window.dragBounds
+    local rememberPosition = bounds.RememberPosition
+    bounds.RememberPosition = function(self)
+        rememberPosition(self)
+        place()
+    end
+    local syncOverlays = window._SyncOverlays
+    window._SyncOverlays = function(self, hidden)
+        syncOverlays(self, hidden)
+        place()
     end
     return button
 end
@@ -64,13 +59,6 @@ function SharingButton:show()
         self.alpha = alpha
         self.sprite.alpha = alpha
     end
-end
-
--- Destroys the button, just before its window is destroyed, so the window's SetEnabled hook is left in place.
-function SharingButton:destroy()
-    if raised == self then raise() end
-    self.window:_UnregisterOverlay(self.sprite)
-    self.sprite:Destroy()
 end
 
 return SharingButton

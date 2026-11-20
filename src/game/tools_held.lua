@@ -3,6 +3,7 @@
 
 local ForestFeatures = require("src/data/forest_features")
 local Forest = require("src/game/forest")
+local ForestStops = require("src/game/forest_stops")
 local GameIds = require("src/game/game_ids")
 
 local ToolsHeld = {}
@@ -54,20 +55,25 @@ function ToolsHeld.update()
     heldBefore = held
 end
 
--- Returns the source keys of the puzzles whose tool the player has (source key -> true), counting a tool still
--- opening its barrier.
-function ToolsHeld.sourceKeys()
+-- The source keys of the puzzles whose tool the player has (source key -> true), counting a tool still opening its
+-- barrier, as at the last refresh.
+ToolsHeld.held = {}
+
+-- Works out the tools held again, on each step, inventory change and forest change. Returns whether they changed.
+function ToolsHeld.refresh()
     local held = toolsCarried()
     for sourceKey, tick in pairs(usedAt) do
         local barrier = barrierOfSourceKey[sourceKey]
         if not Forest.doorsGone[barrier.key] and Forest.ticks - tick <= OPENING_TICKS then held[sourceKey] = true end
     end
-    return held
+    if ForestStops.sameSet(held, ToolsHeld.held) then return false end
+    ToolsHeld.held = held
+    return true
 end
 
 -- Forgets the tools held and used, on leaving the forest.
 function ToolsHeld.forget()
-    heldBefore, usedAt = {}, {}
+    heldBefore, usedAt, ToolsHeld.held = {}, {}, {}
 end
 
 return ToolsHeld

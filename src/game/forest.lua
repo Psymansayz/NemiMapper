@@ -645,7 +645,7 @@ local function enter(region)
     -- a node claimed: the server sends the variable, and the node is republished as used
     Forest.readClaimedToday()
     Event.VarTransmit.Subscribe(SUBSCRIPTION, function(event)
-        if claimedBaseID ~= nil and event.var.id == claimedBaseID then
+        if event.var.id == claimedBaseID then
             Forest.readClaimedToday()
             foundChanged = true
         end
