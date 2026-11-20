@@ -309,12 +309,23 @@ local function freeKeysOfPlayersGone()
     listenToPlayers()
 end
 
--- Reads the info box and the dialogue box, while an NPC tool is not following yet, for a follow message or a refusal
--- as it follows another player.
+-- Returns whether an NPC tool was found that does not follow the player while its door stands, so the info box or
+-- the dialogue box may say that it now follows, or that it follows another player.
+local function npcToolWaiting()
+    for _, entry in ipairs(npcsFound) do
+        local feature = entry.feature
+        if feature.kind == "source" and not Forest.following[feature.key]
+            and not Forest.doorsGone[feature.pair.barrier.key] then
+            return true
+        end
+    end
+    return false
+end
+
+-- Reads the info box and the dialogue box, while an NPC tool waits (npcToolWaiting), for a follow message or a
+-- refusal as it follows another player.
 local function readDialogue()
-    local allFollowing = true
-    for _, sourceKey in pairs(followMessages) do allFollowing = allFollowing and Forest.following[sourceKey] end
-    if allFollowing then return end
+    if not npcToolWaiting() then return end
     local texts = {}
     for index, text in ipairs(DialogueText.open()) do texts[index] = (text:gsub("<br>", " "):gsub("\194\160", " ")) end
     local refused = {} -- source key -> the name of the player its NPC follows
@@ -649,8 +660,8 @@ local function enter(region)
             Forest.readClaimedToday()
             foundChanged = true
         end
-        -- a task taken or finished, or its target done (the Traitor killed)
-        if event.var.id == currentQuestBaseID or doneBaseIDs[event.var.id] then foundChanged = true end
+        -- a task's target done (the Traitor killed). The current task changes only at Trinks, outside the forest.
+        if doneBaseIDs[event.var.id] then foundChanged = true end
     end)
     -- The draw distance goes up to High until the grid settles (draw_distance.lua). Only from Low does the server then
     -- send more (the far map squares, a tick later): that is waited for as a second announcement, and quiet ticks end

@@ -15,7 +15,6 @@ local Settings = require("src/data/settings")
 
 local RouteChoice = {}
 
-local ZONE_SIZE = 8 -- tiles
 local OFF_ROUTE_TILES = 3 -- straying this far from the drawn route recalculates it
 
 RouteChoice.shown = nil -- the key of the feature or sign chosen: a node's, a task's, a puzzle's source key or a sign's
@@ -56,13 +55,9 @@ local function plannedStop(name, player, stops, blocked)
     table.sort(blockedAt)
     local state = table.concat(stopsAt, " ") .. "|" .. table.concat(blockedAt, " ") .. "|" .. tostring(Forest.grid)
     local plan = plans[name]
-    local same = plan ~= nil and plan.state == state
-    -- A plan with no stop is retried when the player enters another zone.
-    local zone = (player.x // ZONE_SIZE) .. "," .. (player.z // ZONE_SIZE)
-    if same and plan.stop == nil and plan.failedIn ~= zone then same = false end
-    if not same then
+    if plan == nil or plan.state ~= state then
         local stop, playerSearch = SolvePlan.nextStop(Forest.grid, player, stops, blocked)
-        plan = { state = state, stop = stop, failedIn = zone, search = playerSearch, searchFrom = player }
+        plan = { state = state, stop = stop, search = playerSearch, searchFrom = player }
         plans[name] = plan
     end
     return plan.stop, plan.searchFrom == player and plan.search or nil
@@ -132,7 +127,7 @@ local function chosenRoute(player, keep)
     end
     if RouteChoice.mapping then return routeByPlan("nodes", ForestStops.mappingStopsNow(held)) end
     if RouteChoice.solving then
-        return routeByPlan("puzzles", ForestStops.solveStops(held), {}, Forest.keysTaken)
+        return routeByPlan("puzzles", ForestStops.solveStops(held), ForestStops.unseenKeyDoors(held), Forest.keysTaken)
     end
     for _, sign in ipairs(ForestFeatures.entranceSigns) do
         if sign.key == RouteChoice.shown then
@@ -150,7 +145,14 @@ local function chosenRoute(player, keep)
     local toolPair = rowFeature.pair
     if Forest.doorsGone[toolPair.barrier.key] then return nil end
     local target = held[toolPair.source.key] and toolPair.barrier or toolPair.source
-    local route, colour, targetEntry, stops, keysUnseen = routeToThing(target.kind, target.key)
+    local route, colour, targetEntry, stops, keysUnseen
+    if target == toolPair.source and (Forest.countOf[target.key] or 0) == 0 then
+        -- a key not found yet is looked for toward the forest's centre
+        route, colour, stops, keysUnseen = Routes.routeTowardCentre(Forest.grid, player, blocked),
+            ForestFeatures.colourOf(target), {}, { target.name }
+    else
+        route, colour, targetEntry, stops, keysUnseen = routeToThing(target.kind, target.key)
+    end
     if route == nil then return nil end
     -- A puzzle chosen is its key and its door, whichever the route leads to now, so both are its stops.
     for _, entry in ipairs(Forest.found) do
@@ -240,11 +242,15 @@ end
 
 -- Called when the player steps: on the route, what is left of it runs from the tile nearest the player; off it, or
 -- with the tools held changed (heldChanged), the route is worked out again.
+-- A choice with no route waits for a forest change: only a key not found yet leaves a target out of reach.
 function RouteChoice.showPlayer(heldChanged)
     if not RouteChoice.isChosen() then return end
     local drawn = RouteChoice.drawn
-    if heldChanged then planAfresh = true end
-    if heldChanged or drawn == nil then return RouteChoice.update() end
+    if heldChanged then
+        planAfresh = true
+        return RouteChoice.update()
+    end
+    if drawn == nil then return end
     local distance, routeTile, nextCorner = nearestOnRoute(drawn.tiles, Forest.playerTile)
     if distance > OFF_ROUTE_TILES then
         plans = {}

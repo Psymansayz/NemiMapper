@@ -176,7 +176,7 @@ end
 Forest.onMonstersChanged = ScoutWindow.showMonsters
 Forest.onNpcMoved = function(entry)
     RouteChoice.showNpcMoved(entry)
-    MapWindow.showNpcMoved()
+    MapWindow.showNpcMoved(entry)
 end
 
 Forest.onInventoryChanged = function()

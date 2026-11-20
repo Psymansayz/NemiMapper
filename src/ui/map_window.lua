@@ -249,11 +249,20 @@ local function tileOnMap(x, z)
         math.floor((bounds.minZ + bounds.length - z) * mapSize / bounds.length + 0.5)
 end
 
+-- Returns whether the map is hidden, as its X only hides it while a legend's own window is shown. Its zones, routes,
+-- markers and player then wait (mapStale) until it shows again, while the legends' windows keep up.
+local function mapHidden()
+    if parts.window.root.hidden ~= true then return false end
+    parts.mapStale = true
+    return true
+end
+
 -- Places one sprite per zone, showing the zone it was copied from, turned as the grid has it so the picture matches the
 -- routes (src/game/forest_grid.lua reads the turns from the zones' standing heights).
 -- The pictures show at once and turn as the zones' turns become known (Forest.zoneTurns), before the grid settles.
 -- A zone's picture and angle are written only when they change, as this runs on every step of a resize.
 local function placeZones()
+    if mapHidden() then return end
     local turns = Forest.zoneTurns
     for index, zone in ipairs(Forest.zones) do
         local shown = parts.zones[index]
@@ -288,10 +297,11 @@ local function pixel(value) return math.floor(value + 0.5) end
 -- Filled on each draw and reused, so drawing a route makes no tables: its points, the direction after each, and
 -- each point's left and right edge points.
 local routeArrays = { {}, {}, {}, {}, {}, {}, {}, {} }
--- Draws a route (its corner tiles, in order) on the routes canvas.
-local function drawRoute(tiles, colour, joinsAtStart)
-    local pointX, pointY, directionX, directionY, leftX, leftY, rightX, rightY = table.unpack(routeArrays)
-    local half = math.max(2, ROUTE_WIDTH * parts.frame.iconScale) / 2
+
+-- Fills the route arrays with a route's points on the map, from its corner tiles in order, leaving out a point on the
+-- one before. Returns how many there are.
+local function routePoints(tiles)
+    local pointX, pointY = routeArrays[1], routeArrays[2]
     local count = 0
     for _, tile in ipairs(tiles) do
         local x, y = tileOnMap(tile.x + 0.5, tile.z + 0.5)
@@ -300,18 +310,33 @@ local function drawRoute(tiles, colour, joinsAtStart)
             pointX[count], pointY[count] = x, y
         end
     end
+    return count
+end
+
+-- Draws a route from its count points (routePoints): its first piece on firstCanvas and the rest on restCanvas.
+-- Without restCanvas the rest stays as drawn, and the first piece ends on the edge points it was drawn with, so the
+-- two meet without a seam.
+local function drawRoute(count, colour, joinsAtStart, firstCanvas, restCanvas)
     if count < 2 then return end
+    local pointX, pointY, directionX, directionY, leftX, leftY, rightX, rightY = table.unpack(routeArrays)
+    local half = math.max(2, ROUTE_WIDTH * parts.frame.iconScale) / 2
     RibbonEdges.fill(pointX, pointY, count, half, joinsAtStart, directionX, directionY, leftX, leftY, rightX, rightY)
     for position = 1, count do
         leftX[position], leftY[position] = pixel(leftX[position]), pixel(leftY[position])
         rightX[position], rightY[position] = pixel(rightX[position]), pixel(rightY[position])
     end
-    local routes = parts.routes
+    local joint = parts.restJoint
+    if restCanvas ~= nil then
+        joint[1], joint[2], joint[3], joint[4] = leftX[2], leftY[2], rightX[2], rightY[2]
+    else
+        leftX[2], leftY[2], rightX[2], rightY[2] = joint[1], joint[2], joint[3], joint[4]
+        count = 2
+    end
     for position = 1, count - 1 do
-        local after = position + 1
-        routes:AddTriangle(leftX[position], leftY[position], rightX[position], rightY[position],
+        local canvas, after = position == 1 and firstCanvas or restCanvas, position + 1
+        canvas:AddTriangle(leftX[position], leftY[position], rightX[position], rightY[position],
             rightX[after], rightY[after], colour)
-        routes:AddTriangle(leftX[position], leftY[position], rightX[after], rightY[after],
+        canvas:AddTriangle(leftX[position], leftY[position], rightX[after], rightY[after],
             leftX[after], leftY[after], colour)
     end
 end
@@ -343,12 +368,12 @@ local function workOutFinalRoute()
     finalRouteOf = { entry = entry, routes = Routes.finalRoute(grid, openings[1] or entry, openings[2], targets) }
 end
 
--- Returns the final route's pieces.
+-- Returns the final route's pieces, once worked out.
 local function finalRoutes()
-    if Forest.entryTile == nil then return {} end
+    if Forest.entryTile == nil then return nil end
     if finalRouteOf ~= nil and finalRouteOf.entry == Forest.entryTile then return finalRouteOf.routes end
     if not Forest.isSearching then waitForFinalRoute() end
-    return {}
+    return nil
 end
 
 local placeMarkers, placeSigns -- defined below
@@ -402,15 +427,32 @@ end
 
 -- Draws the chosen route in its target's colour, from the player on, or the final route in white when none is chosen
 -- and it is on.
+-- A canvas can only be cleared whole, so the piece the player walks along has a canvas of its own (routeStart), and
+-- the rest is drawn again only when it changes (restPainted): a corner passed, another route, or the map's size.
 local function paintRoutes()
-    parts.routes:Clear()
+    if mapHidden() then return end
     local drawn = RouteChoice.drawn
     showKeysUnseen(drawn and drawn.keysUnseen, drawn and drawn.colour)
-    if drawn ~= nil then
-        if view().activeRoute then drawRoute(drawn.ahead or drawn.tiles, drawn.colour) end
-    elseif Forest.grid ~= nil and view().finalRoute and not RouteChoice.isChosen() then
-        -- The first branch starts at the entrance, the others where they leave the tree drawn so far.
-        for index, finalRoute in ipairs(finalRoutes()) do drawRoute(finalRoute, FINAL_ROUTE_COLOUR, index > 1) end
+    local scale = parts.frame.mapSize .. "," .. parts.frame.iconScale
+    parts.routeStart:Clear()
+    if drawn ~= nil and view().activeRoute then
+        local count = routePoints(drawn.ahead or drawn.tiles)
+        -- The points after the first are the end of drawn.tiles, so their count tells whether a corner was passed.
+        local rest = tostring(drawn.tiles) .. "," .. drawn.colour .. "," .. count .. "," .. scale
+        if parts.restPainted == rest then return drawRoute(count, drawn.colour, false, parts.routeStart) end
+        parts.restPainted = rest
+        parts.routes:Clear()
+        return drawRoute(count, drawn.colour, false, parts.routeStart, parts.routes)
+    end
+    local final = drawn == nil and Forest.grid ~= nil and view().finalRoute and not RouteChoice.isChosen()
+        and finalRoutes() or EMPTY
+    local rest = tostring(final) .. "," .. scale
+    if parts.restPainted == rest then return end
+    parts.restPainted = rest
+    parts.routes:Clear()
+    -- The first branch starts at the entrance, the others where they leave the tree drawn so far.
+    for index, finalRoute in ipairs(final) do
+        drawRoute(routePoints(finalRoute), FINAL_ROUTE_COLOUR, index > 1, parts.routes, parts.routes)
     end
 end
 
@@ -490,8 +532,17 @@ local function makeRoutable(sprite, placed, keyOf)
     end)
 end
 
+-- Places a marker at its found feature (entry), at the size placeMarkers gave it.
+local function placeMarker(marker, entry)
+    local x, y = tileOnMap(entry.x, entry.z)
+    marker.x, marker.y = x - marker.width / 2, y - marker.height / 2
+    setBox(marker.sprite, marker.x, marker.y, marker.width, marker.height)
+end
+
 -- Places one sprite per found feature shown, kept and reused in drawing order.
 placeMarkers = function()
+    if mapHidden() then return end
+    parts.markerOf = {} -- entry -> its marker, while shown
     local shown, held = 0, ToolsHeld.held
     local unneeded = view().unneededPuzzles and {} or ForestStops.unneededNow(held)
     parts.stopsShown = RouteChoice.drawn and RouteChoice.drawn.stops or EMPTY
@@ -518,11 +569,10 @@ placeMarkers = function()
                 marker.angle = angle
                 marker.sprite.rotationDegrees = angle
             end
-            local x, y = tileOnMap(entry.x, entry.z)
             marker.width, marker.height = IconSizes[key].width * iconScale, IconSizes[key].height * iconScale
-            marker.x, marker.y = x - marker.width / 2, y - marker.height / 2
-            setBox(marker.sprite, marker.x, marker.y, marker.width, marker.height)
+            placeMarker(marker, entry)
             setHidden(marker.sprite, false)
+            parts.markerOf[entry] = marker
         end
     end
     for index = shown + 1, #parts.markers do setHidden(parts.markers[index].sprite, true) end
@@ -530,6 +580,7 @@ end
 
 -- Places each entrance sign at its opening's clearing.
 placeSigns = function()
+    if mapHidden() then return end
     local stops = Settings.alwaysShowTarget and RouteChoice.drawn and RouteChoice.drawn.stops or EMPTY
     for _, sign in ipairs(parts.signs) do
         local opening = ForestStops.openingOn(sign.side)
@@ -553,6 +604,7 @@ placeSigns = function()
 end
 
 local function showPlayer()
+    if mapHidden() then return end
     local position = view().playerDot and Forest.playerTile or nil
     setHidden(parts.playerMarker, position == nil)
     if position == nil then return end
@@ -1260,10 +1312,13 @@ local function build(nodeWindow, puzzleWindow)
     parts.zoneLayer = create(ui.Layer, parts.map)
     parts.zones = {}
     parts.routes = create(ui.Canvas, parts.map)
+    parts.routeStart = create(ui.Canvas, parts.map)
+    parts.restJoint, parts.restPainted, parts.markerOf = {}, nil, {}
     parts.markerLayer = create(ui.Layer, parts.map)
     parts.markers = {}
     local signLayer = create(ui.Layer, parts.map)
-    for _, filling in ipairs({ mapBackground, parts.zoneLayer, parts.routes, parts.markerLayer, signLayer }) do
+    for _, filling in ipairs({ mapBackground, parts.zoneLayer, parts.routes, parts.routeStart, parts.markerLayer,
+        signLayer }) do
         filling:SetSize(0, 0, 1.0, 1.0) -- fills the map layer
     end
     -- A click on a sign chooses or drops the route to its opening.
@@ -1540,6 +1595,11 @@ end
 function MapWindow.open(PrettyUI, pluginLayer)
     if isOpen() then
         parts.window:Show()
+        if parts.mapStale then
+            parts.mapStale = false
+            newRedraw()
+            showFound()
+        end
         -- Opening the map again brings back the legend windows closed since.
         parts.closedPopped = {}
         showPoppedWindows()
@@ -1590,11 +1650,10 @@ function MapWindow.showForest()
     if isOpen() then showForest() end
 end
 
--- Called when a found NPC moves: its marker follows. A route to it follows by MapWindow.showRoutes.
-function MapWindow.showNpcMoved()
-    if not isOpen() then return end
-    newRedraw()
-    placeMarkers()
+-- Called when a found NPC (entry) moves: its marker follows, if shown. A route to it follows by MapWindow.showRoutes.
+function MapWindow.showNpcMoved(entry)
+    local marker = isOpen() and not mapHidden() and parts.markerOf[entry]
+    if marker then placeMarker(marker, entry) end
 end
 
 -- Called when the tools held change without a step.
@@ -1617,8 +1676,11 @@ function MapWindow.showPlayer(heldChanged)
     newRedraw()
     showPlayer()
     if heldChanged then showHeld() end
-    -- The world is readable only while the friends list is open, so it is checked on each step until known.
-    if parts.world == nil and Forest.bounds ~= nil and WorldNumber.read() ~= nil then showCountText() end
+    -- The world is readable only while the friends list is open, so it is checked on each step until known, while
+    -- the header shows it.
+    if parts.headerShown and parts.world == nil and Forest.bounds ~= nil and WorldNumber.read() ~= nil then
+        showCountText()
+    end
 end
 
 -- Called when the route chosen or drawn changes (RouteChoice.onDrawn).
