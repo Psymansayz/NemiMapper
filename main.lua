@@ -130,7 +130,11 @@ local guidanceWaiting = false
 -- Windows open before entering the forest stay open after leaving it.
 local openBeforeEntering = { scout = false, map = false }
 
-RouteChoice.onDrawn = MapWindow.showRoutes
+-- The route chosen, worked out or cut back to the player (cutBack), goes to the world and the map.
+RouteChoice.onDrawn = function(cutBack)
+    Highlights.showChosen(RouteChoice.drawn, cutBack)
+    MapWindow.showRoutes()
+end
 
 Forest.onEntered = function()
     FullForestAlert.reset()
@@ -209,7 +213,7 @@ local routesChanged = RouteChoice.update
 local function sharingChanged()
     -- A shared map shows the final route.
     -- A chosen route would replace it, and NAVIGATE's or SOLVE's would have no button left to turn it off.
-    if Settings.mapSharingMode and RouteChoice.isChosen() then RouteChoice.choose(nil, false, false) end
+    if Settings.mapSharingMode and RouteChoice.isChosen() then RouteChoice.clear() end
     -- The header shows the world, readable only while the friends list is loaded.
     if Settings.mapSharingMode then WorldNumber.read() end
     MapWindow.showSettings()

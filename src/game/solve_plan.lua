@@ -59,13 +59,21 @@ end
 -- Returns the stop to go to first, and the search from the player with every barrier shut (Routes.search with
 -- parents), for the route to that stop.
 -- stops: [n] = { kind = "key" or "door", x, z (the feature's tile), tiles (every tile it stands on), needs = the
--- key stop a door needs, or nil when the key is held }.
+-- key stop a door needs, or nil when the key is held, group = a node's key, shared by its copies, optional = true
+-- for a stop the tour may leave out }.
 -- player: { x, z }. alwaysBlocked: tile index -> true for tiles never to cross (barriers that are not stops).
 function SolvePlan.nextStop(grid, player, stops, alwaysBlocked)
     local stopCount = #stops
     if stopCount == 0 then return nil end
     local indexOf = {}
     for index, stop in ipairs(stops) do indexOf[stop] = index end
+    -- One claim uses every copy of a node, so visiting one copy visits its group: groupBits[n] is stop n's bit and
+    -- its copies'.
+    local bitsOfGroup, groupBits = {}, {}
+    for index, stop in ipairs(stops) do
+        if stop.group ~= nil then bitsOfGroup[stop.group] = (bitsOfGroup[stop.group] or 0) | (1 << index) end
+    end
+    for index, stop in ipairs(stops) do groupBits[index] = bitsOfGroup[stop.group] or (1 << index) end
     -- Every barrier blocks the way except the one a search starts from.
     local doorIndexes, doorMask = {}, 0 -- barrier stop -> its tiles' grid indexes; the barriers' bits
     for index, stop in ipairs(stops) do
@@ -120,13 +128,18 @@ function SolvePlan.nextStop(grid, player, stops, alwaysBlocked)
         return walking
     end
     local allVisited = (1 << (stopCount + 1)) - 2 -- bits 1 to stopCount
+    local requiredMask = 0 -- the stops a tour must visit: all but the optional ones
+    for index, stop in ipairs(stops) do
+        if not stop.optional then requiredMask = requiredMask | (1 << index) end
+    end
     -- The cheapest way to visit the rest from a stop, cached by the stop and the stops visited, and the stop to go
     -- to next.
-    -- A stop left unvisited costs MISSED, so a tour takes every stop some order can reach before it counts tiles.
+    -- A required stop left unvisited costs MISSED, so a tour takes every one some order can reach before it counts
+    -- tiles.
     -- The rest, out of reach or behind a door whose key is behind that door, are left out.
     local remembered = {}
     local function cheapest(at, visitedMask)
-        if visitedMask == allVisited then return 0 end
+        if visitedMask & requiredMask == requiredMask then return 0 end
         local key = at * (allVisited + 1) + visitedMask
         if remembered[key] ~= nil then return remembered[key] end
         local best, bestFirst = INFINITE, nil
@@ -136,7 +149,7 @@ function SolvePlan.nextStop(grid, player, stops, alwaysBlocked)
             local unvisited = visitedMask & (1 << following) == 0
             local keyHeld = stop.needs == nil or visitedMask & (1 << indexOf[stop.needs]) ~= 0
             if unvisited and keyHeld and walking[following] < INFINITE then
-                local cost = walking[following] + cheapest(following, visitedMask | (1 << following))
+                local cost = walking[following] + cheapest(following, visitedMask | groupBits[following])
                 -- A tie goes to the nearer next stop, so a key on the way is picked up, not passed.
                 if cost < best or (cost == best and walking[following] < walking[bestFirst]) then
                     best, bestFirst = cost, following
@@ -146,7 +159,7 @@ function SolvePlan.nextStop(grid, player, stops, alwaysBlocked)
         if best == INFINITE then
             best = 0
             for index = 1, stopCount do
-                if visitedMask & (1 << index) == 0 then best = best + MISSED end
+                if (requiredMask & ~visitedMask) & (1 << index) ~= 0 then best = best + MISSED end
             end
         end
         remembered[key] = best
@@ -180,22 +193,35 @@ function SolvePlan.neededStops(grid, player, stops, mustVisit, keylessDoors)
         end
         return doors
     end
-    local needed = {}
-    local function need(stop)
-        if needed[stop] then return end
-        needed[stop] = true
+    -- Each stop needed, "required" or "optional". A node with several copies needs only one visited, so the doors and
+    -- keys on the way to a copy are optional: the plan opens one only if that copy adds the fewest tiles.
+    local needed, copies = {}, {}
+    local function need(stop, optional)
+        local state = optional and "optional" or "required"
+        if needed[stop] == "required" or needed[stop] == state then return end
+        needed[stop] = state
         for _, door in ipairs(doorsOnWayTo(stop)) do
-            need(door)
-            if door.needs ~= nil then need(door.needs) end
+            need(door, optional)
+            if door.needs ~= nil then need(door.needs, optional) end
         end
     end
     for _, stop in ipairs(stops) do
-        if mustVisit[stop] then need(stop) end
+        if mustVisit[stop] and stop.group ~= nil then copies[stop.group] = (copies[stop.group] or 0) + 1 end
+    end
+    for _, stop in ipairs(stops) do
+        if mustVisit[stop] then
+            local duplicated = stop.group ~= nil and copies[stop.group] > 1
+            need(stop, duplicated)
+            needed[stop] = "required" -- (a copy is covered by visiting any of its group)
+        end
     end
     local function neededAmong(list)
         local kept = {}
         for _, stop in ipairs(list) do
-            if needed[stop] then kept[#kept + 1] = stop end
+            if needed[stop] then
+                stop.optional = needed[stop] == "optional" or nil
+                kept[#kept + 1] = stop
+            end
         end
         return kept
     end

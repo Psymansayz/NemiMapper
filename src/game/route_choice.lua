@@ -1,6 +1,6 @@
--- The route chosen and where it leads: a feature or an entrance sign clicked on the map or in a legend (shown), or
--- a plan (NAVIGATE's mapping or SOLVE's solving). It draws the route on the ground and the beam on its target, map
--- open or not, and keeps the route for the map to draw (drawn). One route is chosen at a time.
+-- The route chosen and where it leads: a feature or an entrance sign clicked on the map or in a legend, or a plan
+-- (NAVIGATE or SOLVE). It keeps the route (drawn) for the world's highlights and the map to draw, map open or not.
+-- One route is chosen at a time.
 -- A search on every step would cost too much, so the route is kept and worked out again only when the forest, the
 -- choice or the tools held change or the player strays from it.
 
@@ -9,7 +9,6 @@ local Forest = require("src/game/forest")
 local Routes = require("src/game/routes")
 local ForestStops = require("src/game/forest_stops")
 local SolvePlan = require("src/game/solve_plan")
-local Highlights = require("src/game/highlights")
 local ToolsHeld = require("src/game/tools_held")
 local Settings = require("src/data/settings")
 
@@ -17,12 +16,15 @@ local RouteChoice = {}
 
 local OFF_ROUTE_TILES = 3 -- straying this far from the drawn route recalculates it
 
-RouteChoice.shown = nil -- the key of the feature or sign chosen: a node's, a task's, a puzzle's source key or a sign's
-RouteChoice.solving, RouteChoice.mapping = false, false
+-- What is chosen: nil, { plan = "navigate" or "solve" }, or { key = the key of the feature or sign clicked: a node's,
+-- a task's, a puzzle's source key or a sign's }.
+RouteChoice.choice = nil
 -- The route, while one is chosen and reachable: { tiles, colour, target, stops (entry -> true), keysUnseen (names),
 -- ahead (the tiles still ahead of the player), trimmedX, trimmedZ (where the ground route was last cut back) }.
 RouteChoice.drawn = nil
-RouteChoice.onDrawn = nil -- called after each update and each cut back of drawn, for the map to draw it (main.lua)
+-- Called after each update of drawn, and with true after each cut back of it, for the highlights and the map to draw
+-- it (main.lua).
+RouteChoice.onDrawn = nil
 
 -- What a choice by key leads to: a legend row's feature or a puzzle's key.
 local featureOf = {}
@@ -31,13 +33,22 @@ for _, list in ipairs({ ForestFeatures.nodes, ForestFeatures.trinksTasks }) do
 end
 for _, toolPair in ipairs(ForestFeatures.tools) do featureOf[toolPair.source.key] = toolPair.source end
 
-local EMPTY = {}
 local waitsFor = nil -- a feature chosen with work left (unclaimed, active), whose choice drops once that is done
 local plans = {} -- plan name -> its last next stop, kept while its inputs stay the same
 local takenShown = {} -- the keys taken at the last forest change, by source key
 
 function RouteChoice.isChosen()
-    return RouteChoice.solving or RouteChoice.mapping or RouteChoice.shown ~= nil
+    return RouteChoice.choice ~= nil
+end
+
+-- Returns whether the plan ("navigate" or "solve") is chosen.
+function RouteChoice.isPlanChosen(plan)
+    return RouteChoice.choice ~= nil and RouteChoice.choice.plan == plan
+end
+
+-- Returns the key of the feature or sign chosen.
+function RouteChoice.keyChosen()
+    return RouteChoice.choice and RouteChoice.choice.key
 end
 
 -- Returns the next stop of the named plan.
@@ -128,13 +139,13 @@ local function chosenRoute(player, keep)
     local function routeToThing(kind, key)
         return routeOrPlan(ForestStops.stopsOfKind(kind, key), "to " .. key)
     end
-    if RouteChoice.mapping then return routeByPlan("nodes", ForestStops.mappingPlan(held)) end
-    if RouteChoice.solving then
+    if RouteChoice.isPlanChosen("navigate") then return routeByPlan("nodes", ForestStops.mappingPlan(held)) end
+    if RouteChoice.isPlanChosen("solve") then
         return routeByPlan("puzzles", { stops = ForestStops.solveStops(held),
             unseenKeyDoors = ForestStops.unseenKeyDoors(held), takenKeys = Forest.keysTaken })
     end
     for _, sign in ipairs(ForestFeatures.entranceSigns) do
-        if sign.key == RouteChoice.shown then
+        if sign.key == RouteChoice.keyChosen() then
             -- the opening's mouth stands as the route's target
             local opening = ForestStops.openingOn(sign.side)
             if opening == nil then return nil end
@@ -143,7 +154,7 @@ local function chosenRoute(player, keep)
             return routeOrPlan({ mouth }, "to " .. sign.key)
         end
     end
-    local rowFeature = featureOf[RouteChoice.shown]
+    local rowFeature = featureOf[RouteChoice.keyChosen()]
     if rowFeature == nil then return nil end
     if not rowFeature.isPuzzle then return routeToThing(rowFeature.kind, rowFeature.key) end
     local toolPair = rowFeature.pair
@@ -165,57 +176,64 @@ local function chosenRoute(player, keep)
     return drawn
 end
 
--- Returns whether a plan has anything left, which is unclaimed nodes for mapping or unfinished puzzles for solving.
--- When not, its choice drops.
+-- Returns whether the plan chosen has anything left, which is unclaimed nodes for NAVIGATE or unfinished puzzles for
+-- SOLVE. When not, its choice drops.
 local function planHasWork()
-    if RouteChoice.mapping then
+    if RouteChoice.isPlanChosen("navigate") then
         -- Keys and barriers the routes to the nodes do not need are not work.
         return #ForestStops.mappingPlan(ToolsHeld.held).stops > 0
     end
     -- A barrier gone is gone for good, so a found one still stands.
-    return not RouteChoice.solving or Forest.barriersLeft()
+    return Forest.barriersLeft()
 end
 
--- Works out the chosen route again, with the beam on its target and the route on the ground. With afresh, a plan
--- may switch target; otherwise it keeps its target while that is a stop.
+-- Works out the chosen route again. With afresh, a plan may switch target; otherwise it keeps its target while that is
+-- a stop.
 function RouteChoice.update(afresh)
     -- The grid is missing on the tick the player enters, until the forest's first publish.
-    if (RouteChoice.mapping or RouteChoice.solving) and Forest.grid ~= nil and Forest.playerTile ~= nil
+    local choice = RouteChoice.choice
+    if choice ~= nil and choice.plan ~= nil and Forest.grid ~= nil and Forest.playerTile ~= nil
         and not planHasWork() then
-        RouteChoice.mapping, RouteChoice.solving = false, false
+        RouteChoice.choice = nil
     end
-    if waitsFor ~= nil and RouteChoice.shown == waitsFor.key and not ForestStops.isWorkLeft(waitsFor) then
-        RouteChoice.shown, waitsFor = nil, nil
+    if waitsFor ~= nil and RouteChoice.keyChosen() == waitsFor.key and not ForestStops.isWorkLeft(waitsFor) then
+        RouteChoice.choice, waitsFor = nil, nil
     end
     local player, drawn = Forest.playerTile, nil
     if Forest.grid ~= nil and player ~= nil and RouteChoice.isChosen() then
         drawn = chosenRoute(player, not afresh and RouteChoice.drawn and RouteChoice.drawn.target or nil)
     end
     RouteChoice.drawn = drawn
-    -- An opening is not a feature found, so it gets no beam.
-    local target = drawn and drawn.target
-    Highlights.showTarget(target and target.feature and target or nil, drawn and drawn.stops or EMPTY)
-    Highlights.showRoute(drawn and drawn.tiles, drawn and drawn.colour)
-    RouteChoice.onDrawn()
+    RouteChoice.onDrawn(false)
 end
 
--- Chooses one route, clearing the other choices: shown (a feature's or a sign's key), solving or mapping.
-function RouteChoice.choose(shown, solving, mapping)
-    RouteChoice.shown, RouteChoice.solving, RouteChoice.mapping = shown, solving, mapping
-    local feature = featureOf[shown]
+-- Chooses a route (RouteChoice.choice), replacing the one chosen, or drops it with nil.
+local function choose(choice)
+    RouteChoice.choice = choice
+    local feature = choice and featureOf[choice.key]
     waitsFor = feature ~= nil and ForestStops.isWorkLeft(feature) and feature or nil
     RouteChoice.update(true)
 end
 
+-- Drops the route chosen.
+function RouteChoice.clear()
+    choose(nil)
+end
+
 -- Chooses a feature's or sign's route, or drops it when it is the one chosen.
 function RouteChoice.toggle(key)
-    RouteChoice.choose(RouteChoice.shown ~= key and key or nil, false, false)
+    choose(RouteChoice.keyChosen() ~= key and { key = key } or nil)
+end
+
+-- Chooses a plan ("navigate" or "solve"), or drops it when it is the one chosen.
+function RouteChoice.togglePlan(plan)
+    choose(not RouteChoice.isPlanChosen(plan) and { plan = plan } or nil)
 end
 
 -- Starts NAVIGATE's plan, unless it is on or the map is a shared one, which shows only the final route.
 function RouteChoice.startMapping()
-    if RouteChoice.mapping or Settings.mapSharingMode then return end
-    RouteChoice.choose(nil, false, true)
+    if RouteChoice.isPlanChosen("navigate") or Settings.mapSharingMode then return end
+    choose({ plan = "navigate" })
 end
 
 -- Returns where route passes nearest to tile, and the position of the next corner after it.
@@ -258,8 +276,7 @@ function RouteChoice.showPlayer(heldChanged)
     -- The ground route is cut back at each tile walked along it (highlights.lua).
     if drawn.trimmedX ~= routeTile.x or drawn.trimmedZ ~= routeTile.z then
         drawn.trimmedX, drawn.trimmedZ = routeTile.x, routeTile.z
-        Highlights.trimRoute(drawn.ahead)
-        RouteChoice.onDrawn()
+        RouteChoice.onDrawn(true)
     end
 end
 
@@ -287,7 +304,7 @@ end
 
 -- Drops the choice and what was kept for it, on leaving the forest.
 function RouteChoice.forget()
-    RouteChoice.shown, RouteChoice.solving, RouteChoice.mapping, RouteChoice.drawn = nil, false, false, nil
+    RouteChoice.choice, RouteChoice.drawn = nil, nil
     waitsFor, plans, takenShown = nil, {}, {}
 end
 

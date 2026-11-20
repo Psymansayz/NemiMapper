@@ -69,7 +69,8 @@ plugin load (main.lua)
               │ callbacks (wired in main.lua)
               ├─ onEntered  → open the scout window / map
               │   (each of onChanged, onMoved and onInventoryChanged first runs ToolsHeld.refresh, which says whether
-              │    the tools held changed; RouteChoice.onDrawn = MapWindow.showRoutes draws each route worked out)
+              │    the tools held changed; RouteChoice.onDrawn hands each route worked out or cut back to
+              │    Highlights.showChosen and MapWindow.showRoutes)
               ├─ onChanged  → ScoutWindow.showForest, RouteChoice.showForest, MapWindow.showForest, Highlights.refresh,
               │               FullForestAlert.check; starts NAVIGATE once the search ends, if set to
               ├─ onMoved    → RouteChoice.showPlayer (route follows), MapWindow.showPlayer, Highlights.refresh if the
@@ -227,9 +228,11 @@ key stop a door needs, or nil when the key is held.
 - NAVIGATE's plan (`mappingPlan`) is cached by a signature of the found features, the tools held and the keys
   taken; the forest's few loops never lead round a barrier, so where the player stands does not change it. Its
   `unneeded` holds the puzzles no route to a node needs, which the map and highlights can hide.
+- A node with several copies (more than nine nodes) needs only one visited: node stops share a `group`, and the doors
+  and keys on the way to a copy are `optional`, so the plan opens one only if that copy adds the fewest tiles.
 
 **Plans** (`solve_plan.lua`): `SolvePlan.nextStop(grid, player, stops, alwaysBlocked)` finds the first stop of the
-shortest tour through every reachable stop, respecting doors (a door can only be crossed after its key) and leaving
+shortest tour through every reachable required stop, visiting one copy of each node, respecting doors (a door can only be crossed after its key) and leaving
 out stops that cannot be reached (each costs more than any tour). It searches once from the player and once from
 each stop, then runs a dynamic program over the sets of stops visited. `RouteChoice` caches each plan by its inputs
 and keeps the current target while the player follows its route.
@@ -242,19 +245,22 @@ Routes are returned as their corner tiles.
 - `routeTowardCentre`: when every needed door's key is still unseen, the route walks toward the forest's centre.
 
 ### The route chosen (`route_choice.lua`)
-One route is chosen at a time, map open or not: `RouteChoice.shown` (the key of the feature, puzzle or sign clicked),
-`mapping` (NAVIGATE down) or `solving` (SOLVE down). `update` works the route out (`chosenRoute`): a plan's next stop
+One route is chosen at a time, map open or not: `RouteChoice.choice` is nil, `{ plan = "navigate" }` (NAVIGATE down),
+`{ plan = "solve" }` (SOLVE down) or `{ key }` (the feature, puzzle or sign clicked), set by `toggle`, `togglePlan`,
+`startMapping` and `clear`. `update` works the route out (`chosenRoute`): a plan's next stop
 for NAVIGATE or SOLVE, or a route to the thing clicked; a target behind a door becomes a small plan toward it. It
 keeps the result in `RouteChoice.drawn` (`{ tiles, colour, target, stops, keysUnseen, ahead, trimmedX, trimmedZ }`)
-and calls `Highlights.showTarget`, `Highlights.showRoute` and `RouteChoice.onDrawn` (the map's `showRoutes`). It runs
+and calls `RouteChoice.onDrawn`, which main.lua hands to the highlights and the map. It runs
 again when the forest, the choice or the tools held (`ToolsHeld.held`) change; on each step `showPlayer` cuts the
-route back to the player's nearest point on it (`ahead`), and straying more than three tiles works it out again. A plan drops its choice once it has nothing left, and a feature chosen with
-work left (`waitsFor`) drops once that is done.
+route back to the player's nearest point on it (`ahead`, `onDrawn(true)`), and straying more than three tiles works
+it out again. A plan drops its choice once it has nothing left, and a feature chosen with work left (`waitsFor`) drops
+once that is done.
 
 ### The map window (`map_window.lua`)
 The open window's state is the local table `parts`: the PrettyUI window, every component created with its last
 written state and the frame's layout. It draws the route from `RouteChoice.drawn` whenever `RouteChoice.onDrawn`
-calls `showRoutes`, and a click (a marker, a sign, a legend row, NAVIGATE or SOLVE) goes to `RouteChoice.choose`.
+calls `showRoutes`, and a click (a marker, a sign, a legend row, NAVIGATE or SOLVE) goes to `RouteChoice.toggle` or
+`togglePlan`.
 Closing it leaves the route chosen running. While a legend is in its own window, its X only hides it.
 
 Values needed several times in one redraw (the view, the puzzles shown) are worked out once and kept
@@ -266,7 +272,7 @@ Flow:
 2. `showForest` (each `onChanged`) places the zone pictures (`placeZones`), the markers (`placeMarkers`), the signs
    and the legends' counts, then `paintRoutes`.
 3. `paintRoutes` draws the chosen route from the player on, or with nothing chosen the final route, worked out once
-   per entry on the server tick after the search ends. `showRoute` adds the legend's pressed buttons and outlines and
+   per entry on the server tick after the search ends and the grid settles. `showRoute` adds the legend's pressed buttons and outlines and
    the icons shown only as the route's stops. A canvas can only be cleared whole, so the piece the player walks
    along has a canvas of its own (`routeStart`), and the rest (`routes`) is drawn again only when it changes: a
    corner passed, another route, or the map's size (`restPainted`). The final route is drawn once that way too.
