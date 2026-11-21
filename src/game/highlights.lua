@@ -5,6 +5,7 @@ local Forest = require("src/game/forest")
 local ToolsHeld = require("src/game/tools_held")
 local Settings = require("src/data/settings")
 local ForestStops = require("src/game/forest_stops")
+local Sets = require("src/game/sets")
 local RibbonEdges = require("src/game/ribbon_edges")
 
 local Highlights = {}
@@ -157,12 +158,12 @@ local function boxWanted(entry, held, unneeded)
     local feature = entry.feature
     -- a key held or a puzzle solved is never highlighted, even as the route's target
     if feature.isPuzzle and not ForestStops.isPuzzleLeft(entry, held) then return false end
-    if routeStops[entry] and Settings.highlightTarget then return true end
+    if routeStops[entry] and Settings.effective("highlightTarget") then return true end
     if feature.kind == "node" then
-        return Settings.highlightNodes and (not entry.isUsed or Settings.highlightUsedNodes)
+        return Settings.effective("highlightNodes") and (not entry.isUsed or Settings.effective("highlightUsedNodes"))
     end
-    if feature.isPuzzle then return Settings.highlightPuzzles and not unneeded[entry] end
-    return feature.kind == "task" and Settings.highlightTasks and Forest.isTaskActive(feature)
+    if feature.isPuzzle then return Settings.effective("highlightPuzzles") and not unneeded[entry] end
+    return feature.kind == "task" and Settings.effective("highlightTasks") and Forest.isTaskActive(feature)
 end
 
 -- Returns what to highlight now, as [name] = { entry, colour, x, z, box, faces, beam }, each kind true when wanted.
@@ -171,7 +172,7 @@ local function wanted()
     local wantedHighlights = {}
     if not Forest.isInside or Forest.playerTile == nil then return wantedHighlights end
     local held, unneeded = ToolsHeld.held, NONE
-    if Settings.highlightInWorld and Settings.highlightPuzzles and not Settings.highlightUnneededPuzzles then
+    if Settings.effective("highlightPuzzles") and not Settings.effective("highlightUnneededPuzzles") then
         unneeded = ForestStops.mappingPlan(held).unneeded
     end
     for _, entry in ipairs(Forest.found) do
@@ -352,20 +353,29 @@ function Highlights.refresh()
     end
 end
 
--- Shows the chosen route (RouteChoice.drawn): its target's beam, its stops' boxes and the route on the ground, or with
--- cutBack only cuts the ground route back to what is left ahead of the player.
-function Highlights.showChosen(drawn, cutBack)
-    if cutBack then return Highlights.trimRoute(drawn.ahead) end
+-- Takes the chosen route (RouteChoice.drawn): its target gets the beam and its stops are boxed by their setting on the
+-- next refresh, which is due when it returns true. Its route is drawn on the ground.
+local function takeChosen(drawn)
     -- An opening is not a feature found, so it gets no beam.
     local target = drawn and drawn.target
-    Highlights.showTarget(target and target.feature and target or nil, drawn and drawn.stops or NONE)
+    local entry, stops = target and target.feature and target or nil, drawn and drawn.stops or NONE
+    local changed = beamTarget ~= entry or not Sets.same(routeStops, stops)
+    beamTarget, routeStops = entry, stops
     Highlights.showRoute(drawn and drawn.tiles, drawn and drawn.colour)
+    return changed
 end
 
--- Shows the chosen route's target (entry, with the beam) and its stops (entry -> true, boxed by their setting).
-function Highlights.showTarget(entry, stops)
-    if beamTarget == entry and ForestStops.sameSet(routeStops, stops) then return end
-    beamTarget, routeStops = entry, stops
+-- Shows the chosen route (drawn): its target's beam, its stops' boxes and the route on the ground, or with cutBack
+-- only cuts the ground route back to what is left ahead of the player.
+function Highlights.showChosen(drawn, cutBack)
+    if cutBack then return Highlights.trimRoute(drawn.ahead) end
+    if takeChosen(drawn) then Highlights.refresh() end
+end
+
+-- Makes the world's highlights match the forest and the tools held after a change to them, with the chosen route
+-- (drawn).
+function Highlights.refreshWith(drawn)
+    takeChosen(drawn)
     Highlights.refresh()
 end
 

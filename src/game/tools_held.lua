@@ -3,7 +3,7 @@
 
 local ForestFeatures = require("src/data/forest_features")
 local Forest = require("src/game/forest")
-local ForestStops = require("src/game/forest_stops")
+local Sets = require("src/game/sets")
 local GameIds = require("src/game/game_ids")
 
 local ToolsHeld = {}
@@ -66,7 +66,7 @@ function ToolsHeld.refresh()
         local barrier = barrierOfSourceKey[sourceKey]
         if not Forest.doorsGone[barrier.key] and Forest.ticks - tick <= OPENING_TICKS then held[sourceKey] = true end
     end
-    if ForestStops.sameSet(held, ToolsHeld.held) then return false end
+    if Sets.same(held, ToolsHeld.held) then return false end
     ToolsHeld.held = held
     return true
 end

@@ -13,6 +13,9 @@
 --   claimed    the VarBit (var.VarPlayer) set once the node's XP is claimed today
 --   colour     a puzzle pair's colour, for its icon outlines (tools/make_map_art.ps1) and its route
 --   boxHeight  the in-world highlight's height in fine units, where its saved box's does not fit
+--   kind       "node", "task", "source" (a puzzle's key) or "barrier" (its door), set below, with isPuzzle for the
+--              last two and pair, their puzzle
+--   layer      the order the map draws the kinds in, doors first
 
 local ForestFeatures = {}
 
@@ -61,22 +64,48 @@ for _, key in ipairs(ForestFeatures.nodeRotation) do
     end
 end
 
--- The targets of Trinks' tasks. The plant can only be picked while on its task.
+-- Trinks' daily tasks.
 --   questStruct  the task's struct, which the enum RAID1_GOEBIE_IDS_TO_STRUCTS maps to
 --                RAID1_GOEBIE_CURRENT_QUEST's value
+--   parts        what the game counts toward the task: a VarBit (var) or backpack items (item), up to `of`
+-- Two have a target in the forest, which is a feature too (ForestFeatures.trinksTasks). The plant can only be picked
+-- while on its task.
 --   doneVar      the VarBit that becomes non-zero once the target is done (1 on killing the Traitor)
 --   doneItem     the backpack item that shows it is done instead, since picking the fruit sets no variable
-ForestFeatures.trinksTasks = {
-    {
-        key = "pahtli", name = "Pahtli plant", questStruct = "RAID1_GOEBIE_MINIQUEST_10",
-        doneItem = "RAID1_GOEBIE_MINIQUEST_FRUIT",
-        locations = { "RAID1_GOEBIE_MINIQUEST_FRUIT", "RAID1_GOEBIE_MINIQUEST_FRUIT_NO_OP" },
-        addedAs = "RAID1_GOEBIE_MINIQUEST_FRUIT_MULTI",
-    },
-    { key = "traitor", name = "Traitor", npcs = { "RAID1_GOEBIE_TRAITOR" },
-        questStruct = "RAID1_GOEBIE_MINIQUEST_9",
-        doneVar = "RAID1_GOEBIE_NPC_SUBTASK" },
+local NPCS, LOCATIONS = "RAID1_GOEBIE_NPC_SUBTASK", "RAID1_GOEBIE_LOC_SUBTASK"
+local PAHTLI = {
+    key = "pahtli", name = "Pahtli Plant", questStruct = "RAID1_GOEBIE_MINIQUEST_10", parts = {},
+    doneItem = "RAID1_GOEBIE_MINIQUEST_FRUIT",
+    locations = { "RAID1_GOEBIE_MINIQUEST_FRUIT", "RAID1_GOEBIE_MINIQUEST_FRUIT_NO_OP" },
+    addedAs = "RAID1_GOEBIE_MINIQUEST_FRUIT_MULTI",
 }
+local TRAITOR = {
+    key = "traitor", name = "Traitor", questStruct = "RAID1_GOEBIE_MINIQUEST_9",
+    parts = { { var = NPCS, of = 1, what = "Traitor" } },
+    npcs = { "RAID1_GOEBIE_TRAITOR" }, doneVar = NPCS,
+}
+ForestFeatures.dailyTasks = {
+    { name = "Kill Airut", questStruct = "RAID1_GOEBIE_MINIQUEST_1",
+        parts = { { var = NPCS, of = 10, what = "Airut" } } },
+    { name = "Salvage Scraps", questStruct = "RAID1_GOEBIE_MINIQUEST_2",   -- ruined tents in Kanatah
+        parts = { { item = "RAID1_GOEBIE_MINIQUEST_SCRAPS", of = 5, what = "scraps" } } },
+    { name = "Repair Fences", questStruct = "RAID1_GOEBIE_MINIQUEST_3",    -- around Kanatah
+        parts = { { var = LOCATIONS, of = 10, what = "fences" } } },
+    { name = "Clear Rocks", questStruct = "RAID1_GOEBIE_MINIQUEST_4",      -- north-west of Kanatah
+        parts = { { var = LOCATIONS, of = 10, what = "rocks" } } },
+    { name = "Light Beacon", questStruct = "RAID1_GOEBIE_MINIQUEST_5",     -- north of the east entrance
+        parts = { { var = LOCATIONS, of = 1, what = "beacon" } } },
+    { name = "Collect Driftwood", questStruct = "RAID1_GOEBIE_MINIQUEST_6", -- returned to Trinks
+        parts = { { item = "RAID1_GOEBIE_MINIQUEST_DRIFTWOOD", of = 10, what = "driftwood" } } },
+    { name = "Otot Message", questStruct = "RAID1_GOEBIE_MINIQUEST_7",     -- delivered to Acca Otot
+        parts = { { var = NPCS, of = 1, what = "message" } } },
+    { name = "Free Goebies", questStruct = "RAID1_GOEBIE_MINIQUEST_8",     -- caged by the Airut
+        parts = { { var = NPCS, of = 5, what = "Airut" }, { var = LOCATIONS, of = 5, what = "freed" } } },
+    TRAITOR,
+    PAHTLI,
+}
+-- The tasks' targets in the forest, in legend order.
+ForestFeatures.trinksTasks = { PAHTLI, TRAITOR }
 
 -- Each puzzle's tool, its source ("key") and the barrier it opens ("door").
 -- An opened barrier becomes an unlisted location, so it drops off the map.
@@ -132,24 +161,6 @@ ForestFeatures.monstersAtMost = 25
 
 -- Trinks gives this many tasks a day.
 ForestFeatures.tasksADay = 3
--- Data for tracking Trinks' tasks.
--- The Pahtli plant's task counts nothing: the fruit held shows it done.
-local NPCS, LOCATIONS = "RAID1_GOEBIE_NPC_SUBTASK", "RAID1_GOEBIE_LOC_SUBTASK"
-ForestFeatures.trinksDailyTasks = {
-    { name = "Kill Airut", parts = { { var = NPCS, of = 10, what = "Airut" } } },
-    { name = "Salvage Scraps",                                                             -- ruined tents in Kanatah
-        parts = { { item = "RAID1_GOEBIE_MINIQUEST_SCRAPS", of = 5, what = "scraps" } } },
-    { name = "Repair Fences", parts = { { var = LOCATIONS, of = 10, what = "fences" } } }, -- around Kanatah
-    { name = "Clear Rocks", parts = { { var = LOCATIONS, of = 10, what = "rocks" } } },    -- north-west of Kanatah
-    { name = "Light Beacon", parts = { { var = LOCATIONS, of = 1, what = "beacon" } } },   -- north of the east entrance
-    { name = "Collect Driftwood",                                                          -- returned to Trinks
-        parts = { { item = "RAID1_GOEBIE_MINIQUEST_DRIFTWOOD", of = 10, what = "driftwood" } } },
-    { name = "Otot Message", parts = { { var = NPCS, of = 1, what = "message" } } },       -- delivered to Acca Otot
-    { name = "Free Goebies",                                                              -- caged by the Airut
-        parts = { { var = NPCS, of = 5, what = "Airut" }, { var = LOCATIONS, of = 5, what = "freed" } } },
-    { name = "Traitor", parts = { { var = NPCS, of = 1, what = "Traitor" } } },           -- in the forest
-    { name = "Pahtli Plant", parts = {} },                                                 -- its fruit, in the forest
-}
 
 -- The trail signs at the forest's openings, each on its side's edge pointing out of the forest, and the colour of the
 -- route to one (the signs' painted letters). A click routes to the sign's opening, as a click on a feature does.
@@ -157,6 +168,21 @@ ForestFeatures.entranceSigns = {
     { key = "sign_otot", side = "north", colour = 0xF7E1A0FF },
     { key = "sign_kanatah", side = "east", colour = 0xF7E1A0FF },
 }
+
+-- Every feature, and each by its key.
+ForestFeatures.all, ForestFeatures.byKey = {}, {}
+local function describe(feature, kind, layer)
+    feature.kind, feature.layer, feature.isPuzzle = kind, layer, kind == "source" or kind == "barrier"
+    ForestFeatures.all[#ForestFeatures.all + 1] = feature
+    ForestFeatures.byKey[feature.key] = feature
+end
+for _, toolPair in ipairs(ForestFeatures.tools) do
+    describe(toolPair.barrier, "barrier", 1)
+    describe(toolPair.source, "source", 2)
+    toolPair.barrier.pair, toolPair.source.pair = toolPair, toolPair
+end
+for _, task in ipairs(ForestFeatures.trinksTasks) do describe(task, "task", 3) end
+for _, node in ipairs(ForestFeatures.nodes) do describe(node, "node", 4) end
 
 -- A feature's colour, for its routes, rows and boxes: a node's skill's, a puzzle's pair's, or Trinks' tasks'.
 local TASK_COLOUR = 0xF2E05AFF -- yellow: the burning log's puzzle has the orange

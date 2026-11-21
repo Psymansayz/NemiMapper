@@ -4,31 +4,40 @@
 
 local Settings = {}
 
--- Each switch's key and default.
+-- Each switch's key and default. A switch under another counts only while that one is on, and one with offWhen only
+-- while that one is off, as the settings page shows them.
 local SWITCHES = {
     -- General
     { "scoutOpensInForest", false },  -- open the scout window on entering a forest
     { "mapOpensInForest", true },     -- open the map on entering a forest
     { "routeStartsInForest", true },  -- press NAVIGATE on entering a forest
     -- Map
-    { "mapSharingMode", false },      -- see src/ui/map_window.lua's view()
+    { "mapSharingMode", false },      -- see src/ui/map_view.lua's view()
     { "simplifiedLegends", false },   -- the legends show only the node and key pictures
     { "hideUsedNodes", true },        -- hide the nodes claimed today
-    { "hideNodes", false },           --   and the unclaimed ones too
+    { "hideNodes", false,             --   and the unclaimed ones too
+        under = "hideUsedNodes" },
     { "hideTasks", true },            -- hide the Traitor and plant icons when not on their task
     { "hideUnneededPuzzles", true },  -- hide the keys and doors on the map that no route to an unclaimed node needs
-    { "hidePuzzleElements", false },  --   and every other key and door on the map too
+    { "hidePuzzleElements", false,    --   and every other key and door on the map too
+        under = "hideUnneededPuzzles" },
     { "hideEntranceSigns", false },   -- hide the OTOT and KANATAH signs at the forest's openings
     -- Node legend
     { "hideNodeLegend", false },      -- hide the node and task legend beside the map
-    { "popOutNodeLegend", false },    -- put the node legend in its own window
-    { "hideTaskLegend", true },       -- leave Trinks' tasks out of the node legend, except the active one
-    { "hideClaimedLegend", true },    -- leave the nodes claimed today out of the node legend
-    { "hideAbsentMarks", false },     -- no red or brown on the rows of nodes missing from this forest
+    { "popOutNodeLegend", false,      -- put the node legend in its own window
+        offWhen = "hideNodeLegend" },
+    { "hideTaskLegend", true,         -- leave Trinks' tasks out of the node legend, except the active one
+        offWhen = "hideNodeLegend" },
+    { "hideClaimedLegend", true,      -- leave the nodes claimed today out of the node legend
+        offWhen = "hideNodeLegend" },
+    { "hideAbsentMarks", false,       -- no red or brown on the rows of nodes missing from this forest
+        offWhen = "hideNodeLegend" },
     -- Keys and doors
     { "hidePuzzleLegend", true },     -- hide the puzzle legend under the map
-    { "popOutPuzzleLegend", false },  -- put the puzzle legend in its own window
-    { "hideUnneededPairs", true },    -- leave the puzzles not needed, done or absent out of the puzzle legend
+    { "popOutPuzzleLegend", false,    -- put the puzzle legend in its own window
+        offWhen = "hidePuzzleLegend" },
+    { "hideUnneededPairs", true,      -- leave the puzzles not needed, done or absent out of the puzzle legend
+        offWhen = "hidePuzzleLegend" },
     -- Routes on the map
     { "hideFinalRoute", false },      -- no route from the entrance past every node to the exit
     { "hideActiveRoute", false },     -- do not draw the chosen route on the map
@@ -37,12 +46,18 @@ local SWITCHES = {
     { "hideRouteInWorld", false },    -- do not draw the chosen route on the ground
     { "hideTargetBeam", false },      -- no beam of light over the chosen route's target
     { "highlightInWorld", true },     -- 3D boxes in the world around...
-    { "highlightNodes", true },       --   ...the nodes not claimed today
-    { "highlightUsedNodes", false },  --   ...the nodes claimed today too
-    { "highlightTasks", true },       --   ...the current task's target (the Traitor or the Pahtli plant)
-    { "highlightPuzzles", true },     --   ...the keys and doors on the way to a node, until the door opens
-    { "highlightUnneededPuzzles", false }, --   ...and the others too
-    { "highlightTarget", true },      --   ...the chosen route's stops
+    { "highlightNodes", true,         --   ...the nodes not claimed today
+        under = "highlightInWorld" },
+    { "highlightUsedNodes", false,    --   ...the nodes claimed today too
+        under = "highlightNodes" },
+    { "highlightTasks", true,         --   ...the current task's target (the Traitor or the Pahtli plant)
+        under = "highlightInWorld" },
+    { "highlightPuzzles", true,       --   ...the keys and doors on the way to a node, until the door opens
+        under = "highlightInWorld" },
+    { "highlightUnneededPuzzles", false, -- ...and the others too
+        under = "highlightPuzzles" },
+    { "highlightTarget", true,        --   ...the chosen route's stops
+        under = "highlightInWorld" },
     -- Scouting
     { "flashOnFullForest", false },   -- flash the screen green for 5 s on a 9/9 forest
     { "blockOnFullForest", false },   -- block game clicks on a 9/9 forest for 5 s or until dismissed
@@ -54,11 +69,35 @@ local STRINGS = {
     headerText = "FC: FC Nemi", -- the map header's right-hand text, as on the map pack's maps
     keybindOpenMap = "",
 }
--- Each is a slider on the settings page.
+-- Each is a slider on the settings page, under a switch like a switch can be.
 Settings.numbers = {
     -- 0 is opaque, 100 invisible. At 44 the box sides have the fill the boxes were designed around (0x8F).
-    highlightTransparency = { default = 44, min = 0, max = 100 },
+    highlightTransparency = { default = 44, min = 0, max = 100, under = "highlightInWorld" },
 }
+
+-- Each setting's parent and offWhen setting, by key.
+Settings.under, Settings.offWhen = {}, {}
+for _, switch in ipairs(SWITCHES) do
+    Settings.under[switch[1]], Settings.offWhen[switch[1]] = switch.under, switch.offWhen
+end
+for key, number in pairs(Settings.numbers) do Settings.under[key] = number.under end
+
+-- Returns whether a setting takes effect: every setting it is under is on, and its offWhen setting is off.
+function Settings.isEnabled(key)
+    if Settings.offWhen[key] ~= nil and Settings[Settings.offWhen[key]] then return false end
+    local parent = Settings.under[key]
+    while parent ~= nil do
+        if not Settings[parent] then return false end
+        parent = Settings.under[parent]
+    end
+    return true
+end
+
+-- Returns whether a switch is on and takes effect.
+function Settings.effective(key)
+    return Settings[key] and Settings.isEnabled(key)
+end
+
 -- Each window's top-left corner and size, as WindowPlace names them.
 local PLACES = {}
 for _, window in ipairs({ "map", "scout", "settings", "nodeLegend", "puzzleLegend" }) do

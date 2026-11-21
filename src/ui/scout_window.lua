@@ -16,14 +16,12 @@ local WIDTH, HEIGHT = 300, 480 -- HEIGHT only places it, as it is then fitted to
 local MINIMUM_HEIGHT = 140 -- the minimum width comes from widthNeeded
 local TEXT_FONT = id.Font.MUSEO_SANS_15PT_REGULAR -- PrettyUI's text font
 local PADDING = 14 -- PrettyUI's padding on each side of the content
-local WINDOW_EDGE_WIDTH = 16 -- a PrettyUI window is this much wider than its content
 -- The unblock button's row: PrettyUI's button height plus the gap below it.
 -- The window grows by this while the button is shown, so the other rows keep their room.
 local BUTTON_ROW = 30 + 8
 local UNBLOCK_SUBSCRIPTION = "nemi_mapper_scout_unblock"
 -- Marks a node known only from the rotation. It is kept short, as it sets the minimum width.
 local UNSEEN_SUFFIX = " (unseen)"
-local TITLE_AND_BORDER = 40 -- a PrettyUI window's title bar (32) and bottom border (8)
 local COMPLETE_COLOUR = Colours.GREEN
 local INCOMPLETE_COLOUR = Colours.GOLD
 local NODE_COLOUR = 0xFFFFFFFF
@@ -74,7 +72,7 @@ local function showCounts()
     local missedOf = {}
     for _, feature in ipairs(missed) do missedOf[feature.key] = (missedOf[feature.key] or 0) + 1 end
     -- The count goes green when the alert's test passes.
-    local complete = FullForestAlert.forestIsComplete(kinds, missedKinds)
+    local complete = Forest.isFull(kinds, missedKinds, Settings.alertOnNeededNodes)
     setText(parts.countText, kinds .. (kinds == 1 and " Node" or " Nodes"),
         complete and COMPLETE_COLOUR or INCOMPLETE_COLOUR)
     -- Locations arrive over the forest's first server ticks, so the count can rise until the search settles.
@@ -112,7 +110,7 @@ local function widthNeeded(PrettyUI, numberWidth, wordsWidth, isBlocking)
         widest = math.max(widest, textFont:GetStringWidth(node.name .. " x2"),
             textFont:GetStringWidth(node.name .. UNSEEN_SUFFIX))
     end
-    return widest + PADDING * 2 + WINDOW_EDGE_WIDTH
+    return widest + PADDING * 2 + WindowPlace.EDGE_WIDTH
 end
 
 -- Opens the scout window, or brings it to the front if open. While the full-forest alert blocks the game, it has the
@@ -152,7 +150,7 @@ function ScoutWindow.open(PrettyUI, pluginLayer, onOpenMap)
     window:AddSimpleButton("Open the map", onOpenMap)
     -- Fitted to its content it needs no scrollbar. Once the player resizes it, that size is kept.
     if Settings.scoutHeight == nil then
-        window:SetSize(width, window.contentHeight + TITLE_AND_BORDER)
+        window:SetSize(width, window.contentHeight + WindowPlace.EDGE_HEIGHT)
     elseif isBlocking then
         window:SetSize(width, height + BUTTON_ROW)
     end
@@ -177,9 +175,8 @@ local function removeUnblockButton()
     if not isOpen() or parts.unblockButton == nil then return end
     parts.unblockButton:Destroy()
     parts.unblockButton = nil
-    -- PrettyUI's resize handle keeps its own copy of the limits.
-    local window, minimumWidth = parts.window, parts.minimumWidthUnblocked
-    window.minWidth, window.resize.minWidth = minimumWidth, minimumWidth
+    local window = parts.window
+    WindowPlace.setMinimumSize(window, parts.minimumWidthUnblocked, window.minHeight)
     window:SetSize(window.root.width, window.root.height - BUTTON_ROW)
 end
 
