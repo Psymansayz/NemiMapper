@@ -26,15 +26,11 @@ RouteChoice.drawn = nil
 -- it (main.lua).
 RouteChoice.onDrawn = nil
 
--- What a choice by key leads to: a legend row's feature or a puzzle's key.
-local featureOf = {}
-for _, list in ipairs({ ForestFeatures.nodes, ForestFeatures.trinksTasks }) do
-    for _, feature in ipairs(list) do featureOf[feature.key] = feature end
-end
-for _, toolPair in ipairs(ForestFeatures.tools) do featureOf[toolPair.source.key] = toolPair.source end
-
 local waitsFor = nil -- a feature chosen with work left (unclaimed, active), whose choice drops once that is done
-local plans = {} -- plan name -> its last next stop, kept while its inputs stay the same
+local mappingWaits = false -- NAVIGATE starts once the forest's search ends, unless a route is chosen before
+-- The last plan worked out: { state (its inputs), remembered (SolvePlan's tours from each stop), stop (its next),
+-- search and searchFrom (the search from the player it was worked out from) }.
+local plan = nil
 local takenShown = {} -- the keys taken at the last forest change, by source key
 
 function RouteChoice.isChosen()
@@ -58,17 +54,17 @@ local function plannedStop(name, player, stops, blocked)
     -- Stops are told apart by found feature, so a key's NPC first seen is a new stop but one that drifts is not.
     local stopsAt, blockedAt = {}, {}
     for _, stop in ipairs(stops) do
-        stopsAt[#stopsAt + 1] = tostring(stop.entry) .. stop.kind
+        stopsAt[#stopsAt + 1] = tostring(stop.entry) .. stop.kind .. (stop.optional and "?" or "")
             .. (stop.needs and ("<" .. tostring(stop.needs.entry)) or "")
     end
     for index in pairs(blocked) do blockedAt[#blockedAt + 1] = index end
     table.sort(blockedAt)
-    local state = table.concat(stopsAt, " ") .. "|" .. table.concat(blockedAt, " ") .. "|" .. tostring(Forest.grid)
-    local plan = plans[name]
-    if plan == nil or plan.state ~= state then
-        local stop, playerSearch = SolvePlan.nextStop(Forest.grid, player, stops, blocked)
-        plan = { state = state, stop = stop, search = playerSearch, searchFrom = player }
-        plans[name] = plan
+    local state = name .. "|" .. table.concat(stopsAt, " ") .. "|" .. table.concat(blockedAt, " ") .. "|"
+        .. tostring(Forest.grid)
+    if plan == nil or plan.state ~= state then plan = { state = state, remembered = {} } end
+    if plan.searchFrom == nil then
+        plan.stop, plan.search = SolvePlan.nextStop(Forest.grid, player, stops, blocked, plan.remembered)
+        plan.searchFrom = player
     end
     return plan.stop, plan.searchFrom == player and plan.search or nil
 end
@@ -154,7 +150,7 @@ local function chosenRoute(player, keep)
             return routeOrPlan({ mouth }, "to " .. sign.key)
         end
     end
-    local rowFeature = featureOf[RouteChoice.keyChosen()]
+    local rowFeature = ForestFeatures.byKey[RouteChoice.keyChosen()]
     if rowFeature == nil then return nil end
     if not rowFeature.isPuzzle then return routeToThing(rowFeature.kind, rowFeature.key) end
     local toolPair = rowFeature.pair
@@ -209,8 +205,8 @@ end
 
 -- Chooses a route (RouteChoice.choice), replacing the one chosen, or drops it with nil.
 local function choose(choice)
-    RouteChoice.choice = choice
-    local feature = choice and featureOf[choice.key]
+    RouteChoice.choice, mappingWaits = choice, false
+    local feature = choice and ForestFeatures.byKey[choice.key]
     waitsFor = feature ~= nil and ForestStops.isWorkLeft(feature) and feature or nil
     RouteChoice.update(true)
 end
@@ -230,10 +226,10 @@ function RouteChoice.togglePlan(plan)
     choose(not RouteChoice.isPlanChosen(plan) and { plan = plan } or nil)
 end
 
--- Starts NAVIGATE's plan, unless it is on or the map is a shared one, which shows only the final route.
-function RouteChoice.startMapping()
-    if RouteChoice.isPlanChosen("navigate") or Settings.mapSharingMode then return end
-    choose({ plan = "navigate" })
+-- Starts NAVIGATE's plan once the forest's search ends, on entering it, unless a route is chosen or dropped before.
+-- A shared map shows only the final route, so it does not start there.
+function RouteChoice.startMappingAfterSearch()
+    mappingWaits = true
 end
 
 -- Returns where route passes nearest to tile, and the position of the next corner after it.
@@ -258,16 +254,16 @@ local function nearestOnRoute(route, tile)
     return bestDistance, { x = bestX, z = bestZ }, bestNext
 end
 
--- Called when the player steps: on the route, what is left of it runs from the tile nearest the player; off it, or
--- with the tools held changed (heldChanged), the route is worked out again.
+-- Called when the player steps with the tools held unchanged: on the route, what is left of it runs from the tile
+-- nearest the player; off it, the route is worked out again.
 -- A choice with no route waits for a forest change: only a key not found yet leaves a target out of reach.
-function RouteChoice.showPlayer(heldChanged)
-    if heldChanged then return RouteChoice.showHeld() end
+function RouteChoice.showPlayer()
     local drawn = RouteChoice.drawn
     if drawn == nil then return end
     local distance, routeTile, nextCorner = nearestOnRoute(drawn.tiles, Forest.playerTile)
     if distance > OFF_ROUTE_TILES then
-        plans = {}
+        -- The plan's next stop is worked out again from here; its tours from each stop stay.
+        if plan ~= nil then plan.searchFrom = nil end
         return RouteChoice.update(true)
     end
     if nextCorner > #drawn.tiles then return end
@@ -280,7 +276,7 @@ function RouteChoice.showPlayer(heldChanged)
     end
 end
 
--- Called when the tools held change without a step: the route follows them, and a plan may switch target.
+-- Called when the tools held change: the route follows them, and a plan may switch target.
 function RouteChoice.showHeld()
     if RouteChoice.isChosen() then RouteChoice.update(true) end
 end
@@ -295,6 +291,10 @@ function RouteChoice.showForest(heldChanged)
     takenShown = {}
     for sourceKey in pairs(Forest.keysTaken) do takenShown[sourceKey] = true end
     if RouteChoice.isChosen() then RouteChoice.update(afresh) end
+    if mappingWaits and not Forest.isSearching then
+        mappingWaits = false
+        if not Settings.mapSharingMode then choose({ plan = "navigate" }) end
+    end
 end
 
 -- Called when a found NPC (entry) moves: a route leading to it follows it.
@@ -305,7 +305,7 @@ end
 -- Drops the choice and what was kept for it, on leaving the forest.
 function RouteChoice.forget()
     RouteChoice.choice, RouteChoice.drawn = nil, nil
-    waitsFor, plans, takenShown = nil, {}, {}
+    waitsFor, plan, takenShown, mappingWaits = nil, nil, {}, false
 end
 
 return RouteChoice

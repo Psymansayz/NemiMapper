@@ -4,7 +4,6 @@
 -- A nearly invisible rectangle takes the mouse's clicks, with the scout window raised above it.
 -- Alerts can end early via a button on the scout window.
 
-local ForestFeatures = require("src/data/forest_features")
 local Forest = require("src/game/forest")
 local Settings = require("src/data/settings")
 
@@ -72,27 +71,12 @@ local function onLogicTick()
     if flash ~= nil and ticks % flashTicks == 0 then flash.hidden = ticks // flashTicks % 2 == 1 end
 end
 
--- Returns whether the forest should trigger the alert.
-function FullForestAlert.forestIsComplete(kinds, missedKinds)
-    if kinds >= #ForestFeatures.nodes then return true end
-    -- which nodes the forest has is known only once the search settles
-    if not Settings.alertOnNeededNodes or Forest.isSearching then return false end
-    local needed = 0
-    for _, node in ipairs(ForestFeatures.nodes) do
-        if not Forest.isNodeClaimed(node.key) then
-            needed = needed + 1
-            if (Forest.countOf[node.key] or 0) == 0 and not missedKinds[node.key] then return false end
-        end
-    end
-    return needed > 0
-end
-
 -- Called when what was found changes. Alerts the first time this forest entry is complete.
 function FullForestAlert.check()
     if alerted then return end
     if not (Settings.flashOnFullForest or Settings.blockOnFullForest) then return end
     local kinds, _, missedKinds = Forest.scoutCounts()
-    if not FullForestAlert.forestIsComplete(kinds, missedKinds) then return end
+    if not Forest.isFull(kinds, missedKinds, Settings.alertOnNeededNodes) then return end
     alerted, ticks = true, 0
     Event.Logic.Subscribe(SUBSCRIPTION, onLogicTick)
     local pluginLayer = ui.Interfaces:GetComponent(id.Component.TOPLEVEL_V2__PLUGIN_BUILD_LAYER_TOP)

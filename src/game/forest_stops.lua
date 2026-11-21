@@ -79,17 +79,6 @@ function ForestStops.barrierTiles()
     return blocked
 end
 
--- Returns whether two sets (key -> true) hold the same keys: a route's stops by entry, or the tools held by source key.
-function ForestStops.sameSet(first, second)
-    for key in pairs(first) do
-        if not second[key] then return false end
-    end
-    for key in pairs(second) do
-        if not first[key] then return false end
-    end
-    return true
-end
-
 -- Returns whether a key or door is still needed.
 function ForestStops.isPuzzleLeft(entry, held)
     local feature = entry.feature

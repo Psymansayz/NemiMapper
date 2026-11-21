@@ -4,6 +4,16 @@ local Settings = require("src/data/settings")
 
 local WindowPlace = {}
 
+-- A PrettyUI window is this much larger than its content: two 8-wide borders, and its 32-high title bar and bottom
+-- border.
+WindowPlace.EDGE_WIDTH, WindowPlace.EDGE_HEIGHT = 16, 40
+
+-- Sets a window's minimum size. PrettyUI's resize handle keeps its own copy of the limits.
+function WindowPlace.setMinimumSize(window, width, height)
+    window.minWidth, window.minHeight = width, height
+    window.resize.minWidth, window.resize.minHeight = width, height
+end
+
 -- Remembers a window's place and size from its root, less heightLess (a row the window has only sometimes).
 function WindowPlace.remember(root, name, heightLess)
     Settings[name .. "X"], Settings[name .. "Y"] = math.floor(root.x), math.floor(root.y)

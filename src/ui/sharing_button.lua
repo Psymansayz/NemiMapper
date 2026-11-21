@@ -9,6 +9,7 @@ local SPRITE = id.Sprite.RS3_ICON_LOCAL_CHAT_FILTER
 local SIZE = 20 -- PrettyUI's close button's size
 local LEFT, TOP = 8, 6 -- from the window's corner, like the close button's
 local OFF_ALPHA = 0.45
+local CLICK_SUBSCRIPTION = "nemi_mapper_sharing_click"
 
 -- Adds the button to window's title drag layer, which hides and raises it with the title bar.
 -- The drag layer is a sibling over the window, so a button inside the window would be covered by it.
@@ -19,8 +20,13 @@ function SharingButton.add(PrettyUI, window, onToggle)
     sprite.clickthrough = false
     sprite.enabled = true
     sprite:SetSize(SIZE, SIZE)
+    -- The mode can move a legend back into the map, which rebuilds it and destroys this button, and a component can't
+    -- be destroyed in its own click, so the toggle waits for the next frame.
     sprite:Subscribe(ui.Hook.ONCLICK, function()
-        onToggle()
+        Event.Draw.Subscribe(CLICK_SUBSCRIPTION, function()
+            Event.Draw.Unsubscribe(CLICK_SUBSCRIPTION)
+            onToggle()
+        end)
         return true
     end)
     local button = setmetatable({ sprite = sprite }, SharingButton)

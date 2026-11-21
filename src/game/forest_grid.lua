@@ -42,31 +42,32 @@ local function turnedTiles(values, quarterTurns)
     return turnedValues
 end
 
--- A zone's heights never change once read, so its turns are worked out once: its heights -> its turns, or false
--- when none.
+-- A zone's heights never change once read, so its turns are worked out once: its heights -> its turns.
 local turnsOfStanding = {}
 
 -- Returns the clockwise quarter turns that best match the template zone sourceKey's standing heights to
--- standing; none when two turns match equally well.
+-- standing, as a list: more than one when several match equally well.
 -- The forest replaces a few tiles (nodes, barriers) and a zone read from afar lacks small plants, but the turn with the
 -- most matching tiles still stands out.
-local function turnByStanding(sourceKey, standing)
+local function turnsByStanding(sourceKey, standing)
     if standing == nil then return nil end
     local known = turnsOfStanding[standing]
-    if known ~= nil then return known or nil end
+    if known ~= nil then return known end
     local template = TemplateStanding[sourceKey]
-    local bestTurns, bestAlike, tied = nil, -1, false
+    local bestTurns, bestAlike = {}, -1
     for quarterTurns = 0, 3 do
         local alike = 0
         for index, turned in ipairs(turnedIndex[quarterTurns]) do
             if template[index] == standing[turned] then alike = alike + 1 end
         end
-        if alike > bestAlike then bestTurns, bestAlike, tied = quarterTurns, alike, false
-        elseif alike == bestAlike then tied = true end
+        if alike > bestAlike then
+            bestTurns, bestAlike = { quarterTurns }, alike
+        elseif alike == bestAlike then
+            bestTurns[#bestTurns + 1] = quarterTurns
+        end
     end
-    local turns = not tied and bestTurns or nil
-    turnsOfStanding[standing] = turns or false
-    return turns
+    turnsOfStanding[standing] = bestTurns
+    return bestTurns
 end
 
 -- Returns the template zone sourceKey's ground flags, indexed as in turnedTiles, from the data's text rows.
@@ -81,15 +82,16 @@ local function groundTiles(sourceKey)
     return tiles
 end
 
--- Cache of each template zone in every turn: "x_z" -> { ground, turnMatters }. ground: by quarter turns, its
--- walkable tiles as flat x, z offset pairs from the south-west corner. turnMatters: whether its turns differ in
--- which tiles are walkable; one that does not (open ground) cannot be turned wrongly.
+-- Cache of each template zone in every turn: "x_z" -> { ground, groundKey, turnMatters }. ground: by quarter turns,
+-- its walkable tiles as flat x, z offset pairs from the south-west corner, and groundKey the same as a string to
+-- compare. turnMatters: whether its turns differ in which tiles are walkable; one that does not (open ground) cannot
+-- be turned wrongly.
 local groundTurnsCache = {}
 local function groundTurns(sourceKey)
     local template = groundTurnsCache[sourceKey]
     if template ~= nil then return template end
     local tiles = groundTiles(sourceKey)
-    template = { ground = {}, turnMatters = false }
+    template = { ground = {}, groundKey = {}, turnMatters = false }
     for quarterTurns = 0, 3 do
         local turned = turnedTiles(tiles, quarterTurns)
         local ground = {}
@@ -99,34 +101,53 @@ local function groundTurns(sourceKey)
             end
             if turned[tileIndex] ~= tiles[tileIndex] then template.turnMatters = true end
         end
-        template.ground[quarterTurns] = ground
+        template.ground[quarterTurns], template.groundKey[quarterTurns] = ground, table.concat(ground, ",")
     end
     groundTurnsCache[sourceKey] = template
     return template
 end
 
+-- Returns whether the turns give a zone the same walkable tiles.
+local function sameGround(template, turns)
+    for _, quarterTurns in ipairs(turns) do
+        if template.groundKey[quarterTurns] ~= template.groundKey[turns[1]] then return false end
+    end
+    return true
+end
+
 -- Returns the grid over the forest's bounds (minX, minZ, width, length in tiles) with every zone's tiles.
 -- standingByZone: "x,z" of a zone -> its 64 standing heights (src/game/standing_heights.lua).
--- grid.settled is false while a zone whose turn matters has no heights to turn it by.
+-- grid.settled is false while a zone whose turn matters has no heights to turn it by, or turns that match its heights
+-- equally well and differ in its walkable tiles; one of those is taken meanwhile, and grid.tiedZones has the zone's
+-- "x,z" for its heights to be read again from nearer.
 -- A forest's zones never change, so its tiles follow from the turns: previous, the forest's last grid, is returned
 -- when the turns and settledness are the same.
 function ForestGrid.build(zones, bounds, standingByZone, previous)
-    local turnsOf, settled = {}, true
+    local turnsOf, settled, tied = {}, true, {}
     for index, zone in ipairs(zones) do
-        local turns = turnByStanding(zone.templateKey, standingByZone[zone.x .. "," .. zone.z])
-        if turns == nil and groundTurns(zone.templateKey).turnMatters then settled = false end
-        turnsOf[index] = turns or 0
+        local zoneKey = zone.x .. "," .. zone.z
+        local template = groundTurns(zone.templateKey)
+        local turns = turnsByStanding(zone.templateKey, standingByZone[zoneKey])
+        if template.turnMatters and (turns == nil or not sameGround(template, turns)) then
+            settled = false
+            if turns ~= nil then tied[zoneKey] = true end
+        end
+        turnsOf[index] = turns and turns[1] or 0
     end
     if previous ~= nil and previous.settled == settled then
         local same = true
         for index, turns in ipairs(turnsOf) do same = same and previous.turns[index] == turns end
-        if same then return previous end
+        if same then
+            previous.tiedZones = tied
+            return previous
+        end
     end
     local grid = setmetatable({
         minX = bounds.minX, minZ = bounds.minZ, width = bounds.width, length = bounds.length,
         walkable = {}, -- tile index -> true
         turns = turnsOf, -- zone index -> quarter turns
         settled = settled,
+        tiedZones = tied,
     }, Grid)
     for index, zone in ipairs(zones) do
         local ground = groundTurns(zone.templateKey).ground[turnsOf[index]]

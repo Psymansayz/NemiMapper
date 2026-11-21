@@ -75,10 +75,8 @@ for _, node in ipairs(ForestFeatures.nodes) do
     claimedBaseID = GameIds.baseIDOf(variable) or claimedBaseID
 end
 
--- Lists a feature under its game ids, with its kind ("node", "task", "source" or "barrier") and drawn layer on the map.
-local function list(feature, kind, layer)
-    feature.kind, feature.layer = kind, layer
-    feature.isPuzzle = kind == "source" or kind == "barrier"
+-- Lists a feature under its game ids.
+local function list(feature)
     for _, name in ipairs(feature.locations or {}) do
         local locID = GameIds.resolve("Loc", name)
         if locID ~= nil then featureOfLocID[locID] = feature end
@@ -92,14 +90,7 @@ local function list(feature, kind, layer)
         if locID ~= nil then featureAddedAs[locID] = feature end
     end
 end
-
-for _, toolPair in ipairs(ForestFeatures.tools) do
-    list(toolPair.barrier, "barrier", 1)
-    list(toolPair.source, "source", 2)
-    toolPair.barrier.pair, toolPair.source.pair = toolPair, toolPair
-end
-for _, task in ipairs(ForestFeatures.trinksTasks) do list(task, "task", 3) end
-for _, node in ipairs(ForestFeatures.nodes) do list(node, "node", 4) end
+for _, feature in ipairs(ForestFeatures.all) do list(feature) end
 
 -- What the forest has shown so far. Features stay known out of sight; only a change at their tile removes them.
 local locationsFound = {} -- packed coordinate -> entry (locationEntry), scanned or announced
@@ -131,22 +122,21 @@ function Forest.readClaimedToday()
     return count
 end
 
--- Each task's current-quest value from the game's enum.
-local questOf = {}
-for _, task in ipairs(ForestFeatures.trinksTasks) do
+-- Each task's current-quest value from the game's enum, and the task of each value.
+local questOf, taskOfQuest = {}, {}
+for _, task in ipairs(ForestFeatures.dailyTasks) do
     -- an unknown struct's name reads as nil
     local struct = config.Struct[task.questStruct]
     local quest = struct and config.Enum.RAID1_GOEBIE_IDS_TO_STRUCTS:GetInputValues(struct)[1]
     if quest ~= nil then
-        questOf[task] = quest
+        questOf[task], taskOfQuest[quest] = quest, task
     else
         GameIds.noteUnknown("Struct", task.questStruct)
     end
 end
 
--- Each task's VarBit marking its target's part done, and the item it gives, if any.
+-- Each forest task's VarBit marking its target's part done, and the item it gives, if any.
 local doneVariableOf, doneItemOf = {}, {}
-local doneItemOfQuest = {} -- a forest task's current-quest value -> the item that shows it done
 local doneBaseIDs = {} -- the done variables' base variables, which are what the server sends
 for _, task in ipairs(ForestFeatures.trinksTasks) do
     if task.doneVar ~= nil then
@@ -155,10 +145,7 @@ for _, task in ipairs(ForestFeatures.trinksTasks) do
         local baseID = GameIds.baseIDOf(variable)
         if baseID ~= nil then doneBaseIDs[baseID] = true end
     end
-    if task.doneItem ~= nil then
-        doneItemOf[task] = GameIds.resolve("Obj", task.doneItem)
-        if questOf[task] ~= nil then doneItemOfQuest[questOf[task]] = doneItemOf[task] end
-    end
+    if task.doneItem ~= nil then doneItemOf[task] = GameIds.resolve("Obj", task.doneItem) end
 end
 
 -- Returns the items in the backpack and worn equipment: item id -> true.
@@ -208,7 +195,7 @@ end
 
 -- The VarBits the game counts a task's parts in, and the items it counts.
 local partVariableOf, partItemOf = {}, {}
-for _, task in ipairs(ForestFeatures.trinksDailyTasks) do
+for _, task in ipairs(ForestFeatures.dailyTasks) do
     for _, part in ipairs(task.parts) do
         if part.var ~= nil and partVariableOf[part.var] == nil then
             partVariableOf[part.var] = GameIds.playerVariable(part.var)
@@ -221,13 +208,12 @@ end
 
 -- Returns whether the current task counts items carried in the backpack, so a change to it may alter its progress.
 function Forest.taskCountsItems()
-    if currentQuest == nil then return false end
-    local task = ForestFeatures.trinksDailyTasks[currentQuest.value]
+    local task = currentQuest and taskOfQuest[currentQuest.value]
     if task == nil then return false end
     for _, part in ipairs(task.parts) do
         if part.item ~= nil then return true end
     end
-    return doneItemOfQuest[currentQuest.value] ~= nil
+    return doneItemOf[task] ~= nil
 end
 
 -- Returns the current Trinks' task: its name, its parts as counted
@@ -235,7 +221,7 @@ end
 function Forest.currentTask()
     if currentQuest == nil or currentQuest.value == 0 then return nil end
     local quest = currentQuest.value
-    local task = ForestFeatures.trinksDailyTasks[quest]
+    local task = taskOfQuest[quest]
     if task == nil then return { name = "task " .. quest, parts = {}, done = false } end
     local parts, done = {}, true
     for index, part in ipairs(task.parts) do
@@ -250,7 +236,7 @@ function Forest.currentTask()
         done = done and count >= part.of
     end
     -- a forest task (the Pahtli plant) has no parts and is done once its item is held
-    local itemID = doneItemOfQuest[quest]
+    local itemID = doneItemOf[task]
     if itemID ~= nil then done = Inventory.Find(config.Inv.INV.id):GetTotal(itemID) > 0 end
     return { name = task.name, parts = parts, done = done }
 end
@@ -407,14 +393,29 @@ end
 -- Reads the standing heights of zones not read yet, and returns whether any zone was read.
 -- A zone reads as nothing standing until the client loads its models, which for a far zone waits until the player
 -- comes nearer, so it is retried as the player moves.
+local tiedZones = {} -- the zones whose heights matched turns equally well when last built (ForestGrid.build)
+
+-- Returns whether two zones' standing heights differ.
+local function heightsDiffer(first, second)
+    for index, height in ipairs(first) do
+        if second[index] ~= height then return true end
+    end
+    return false
+end
+
+-- Reads the heights of the zones not read yet, and of those whose turns tied, as a read from nearer may hold what a
+-- read from afar lacked. Returns whether any were read anew.
 local function readStanding()
     local level = Player.GetEntity().coordGrid.level
     local anyRead = false
     for _, zone in ipairs(Forest.zones) do
         local zoneKey = zone.x .. "," .. zone.z
-        if Forest.standingByZone[zoneKey] == nil and ForestGrid.hasStanding(zone.templateKey) then
-            Forest.standingByZone[zoneKey] = StandingHeights.read(level, zone.x, zone.z)
-            anyRead = anyRead or Forest.standingByZone[zoneKey] ~= nil
+        local known = Forest.standingByZone[zoneKey]
+        if (known == nil or tiedZones[zoneKey]) and ForestGrid.hasStanding(zone.templateKey) then
+            local standing = StandingHeights.read(level, zone.x, zone.z)
+            if standing ~= nil and (known == nil or heightsDiffer(standing, known)) then
+                Forest.standingByZone[zoneKey], anyRead = standing, true
+            end
         end
     end
     return anyRead
@@ -569,7 +570,7 @@ local function forgetForest()
     Forest.found, Forest.countOf, Forest.doorsGone, Forest.following = {}, {}, {}, {}
     Forest.keysTaken, playersRemoved = {}, false
     Forest.standingByZone = {}
-    Forest.grid, builtGrid, Forest.zoneTurns = nil, nil, nil
+    Forest.grid, builtGrid, Forest.zoneTurns, tiedZones = nil, nil, nil, {}
     Forest.playerTile, Forest.entryTile = nil, nil
     Forest.monstersSpawned = 0
     npcsFound, monstersSeen, taskItemsHeld, itemsHeldNow = {}, {}, {}, nil
@@ -728,11 +729,15 @@ local function onServerTick()
     end
     readDialogue()
     freeKeysOfPlayersGone()
+    -- The player's tile first, so what follows works from where the player is now, and the heights read on stepping
+    -- into a new zone reach the grid on this tick.
+    followPlayer()
     followNpcs()
     -- heights read by a scan or a step may change the grid without a find
     if gridStale then
         gridStale = false
         local grid = ForestGrid.build(Forest.zones, Forest.bounds, Forest.standingByZone, builtGrid)
+        tiedZones = grid.tiedZones
         if grid ~= builtGrid then builtGrid, Forest.zoneTurns, foundChanged = grid, grid.turns, true end
     end
     -- an unsettled grid is held back until gridDueTick
@@ -740,7 +745,6 @@ local function onServerTick()
         Forest.grid, foundChanged = builtGrid, true
     end
     if foundChanged then publish() end
-    followPlayer()
     -- After a reload only the scans find the nodes, keys and doors, so the draw distance stays up until they settle
     -- too, as the client lets far squares go below Medium.
     if Forest.grid ~= nil and (not announcementMissed or settlingTicksLeft == 0) then DrawDistance.restore() end
@@ -832,6 +836,22 @@ function Forest.scoutCounts()
         end
     end
     return kinds, missed, missedKinds
+end
+
+-- Returns whether the forest has every node kind, from the scout window's counts, or with neededOnly every kind still
+-- unclaimed today.
+function Forest.isFull(kinds, missedKinds, neededOnly)
+    if kinds >= #ForestFeatures.nodes then return true end
+    -- which nodes the forest has is known only once the search settles
+    if not neededOnly or Forest.isSearching then return false end
+    local needed = 0
+    for _, node in ipairs(ForestFeatures.nodes) do
+        if not Forest.isNodeClaimed(node.key) then
+            needed = needed + 1
+            if (Forest.countOf[node.key] or 0) == 0 and not missedKinds[node.key] then return false end
+        end
+    end
+    return needed > 0
 end
 
 -- Returns how many of the nine node kinds the forest has, and how many nodes in total.

@@ -58,11 +58,13 @@ end
 
 -- Returns the stop to go to first, and the search from the player with every barrier shut (Routes.search with
 -- parents), for the route to that stop.
+-- remembered: the cheapest tours from each stop, kept by the caller for the same stops and barriers. Only the first
+-- stop depends on where the player is, so a plan worked out again from elsewhere reuses them.
 -- stops: [n] = { kind = "key" or "door", x, z (the feature's tile), tiles (every tile it stands on), needs = the
 -- key stop a door needs, or nil when the key is held, group = a node's key, shared by its copies, optional = true
 -- for a stop the tour may leave out }.
 -- player: { x, z }. alwaysBlocked: tile index -> true for tiles never to cross (barriers that are not stops).
-function SolvePlan.nextStop(grid, player, stops, alwaysBlocked)
+function SolvePlan.nextStop(grid, player, stops, alwaysBlocked, remembered)
     local stopCount = #stops
     if stopCount == 0 then return nil end
     local indexOf = {}
@@ -137,7 +139,7 @@ function SolvePlan.nextStop(grid, player, stops, alwaysBlocked)
     -- A required stop left unvisited costs MISSED, so a tour takes every one some order can reach before it counts
     -- tiles.
     -- The rest, out of reach or behind a door whose key is behind that door, are left out.
-    local remembered = {}
+    remembered = remembered or {}
     local function cheapest(at, visitedMask)
         if visitedMask & requiredMask == requiredMask then return 0 end
         local key = at * (allVisited + 1) + visitedMask
@@ -162,10 +164,10 @@ function SolvePlan.nextStop(grid, player, stops, alwaysBlocked)
                 if (requiredMask & ~visitedMask) & (1 << index) ~= 0 then best = best + MISSED end
             end
         end
-        remembered[key] = best
+        -- The tour from the player (0) is not kept, as the player moves, so it gives the first stop each time.
+        if at ~= 0 then remembered[key] = best end
         return best, bestFirst
     end
-    -- no other call starts at the player (0), so this one is never found remembered and gives the first stop
     local _, first = cheapest(0, 0)
     return first and stops[first], playerSearch
 end

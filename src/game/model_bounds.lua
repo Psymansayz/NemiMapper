@@ -14,12 +14,7 @@ local boxOf = {}
 local function listBoxes(feature)
     boxOf[feature] = Data[feature.addedAs or ""] or Data[(feature.locations or feature.npcs)[1]]
 end
-for _, node in ipairs(ForestFeatures.nodes) do listBoxes(node) end
-for _, task in ipairs(ForestFeatures.trinksTasks) do listBoxes(task) end
-for _, toolPair in ipairs(ForestFeatures.tools) do
-    listBoxes(toolPair.source)
-    listBoxes(toolPair.barrier)
-end
+for _, feature in ipairs(ForestFeatures.all) do listBoxes(feature) end
 
 -- Returns the box round the model of a location of feature turned rotation quarter turns, as the highlight takes it:
 -- { x, X, z, Z, height } in fine units from the centre of its south-west tile. width and length are its size in tiles
