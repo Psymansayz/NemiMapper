@@ -4,6 +4,7 @@
 local IconSizes = require("src/data/icon_sizes")
 local Colours = require("src/ui/colours")
 local ComponentWrites = require("src/ui/component_writes")
+local StatusText = require("src/ui/status_text")
 
 local MapWidgets = {}
 
@@ -108,16 +109,12 @@ function MapWidgets.setDimmed(isDimmed, ...)
 end
 
 -- Shows a legend row's or puzzle's label, writing its text and colour only when they change.
+-- Writing the colour also writes its alpha, so the dimming is written again after it.
 function MapWidgets.showLabel(label, holder, isHint, text, isDimmed)
-    if holder.labelText ~= text then
-        holder.labelText = text
-        label.content = text
-    end
-    local colourChanged = holder.isHint ~= isHint
-    if colourChanged then
-        holder.isHint = isHint
-        label.rgba = isHint and HINT_COLOUR or MapWidgets.TEXT_COLOUR
-    end
+    holder.labelStatus = holder.labelStatus or StatusText.new(label)
+    local colour = isHint and HINT_COLOUR or MapWidgets.TEXT_COLOUR
+    local colourChanged = holder.labelStatus.colour ~= colour
+    StatusText.set(holder.labelStatus, text, colour)
     if colourChanged or holder.labelDimmed ~= isDimmed then
         holder.labelDimmed = isDimmed
         MapWidgets.setDimmed(isDimmed, label)

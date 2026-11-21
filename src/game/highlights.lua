@@ -353,22 +353,25 @@ function Highlights.refresh()
     end
 end
 
+local showRoute, trimRoute -- the ground route's, defined below
+
 -- Takes the chosen route (RouteChoice.drawn): its target gets the beam and its stops are boxed by their setting on the
--- next refresh, which is due when it returns true. Its route is drawn on the ground.
+-- next refresh, which is due when it returns true. What is left of its route ahead of the player is drawn on the
+-- ground.
 local function takeChosen(drawn)
     -- An opening is not a feature found, so it gets no beam.
     local target = drawn and drawn.target
     local entry, stops = target and target.feature and target or nil, drawn and drawn.stops or NONE
     local changed = beamTarget ~= entry or not Sets.same(routeStops, stops)
     beamTarget, routeStops = entry, stops
-    Highlights.showRoute(drawn and drawn.tiles, drawn and drawn.colour)
+    showRoute(drawn and (drawn.ahead or drawn.tiles), drawn and drawn.colour)
     return changed
 end
 
 -- Shows the chosen route (drawn): its target's beam, its stops' boxes and the route on the ground, or with cutBack
 -- only cuts the ground route back to what is left ahead of the player.
 function Highlights.showChosen(drawn, cutBack)
-    if cutBack then return Highlights.trimRoute(drawn.ahead) end
+    if cutBack then return trimRoute(drawn.ahead) end
     if takeChosen(drawn) then Highlights.refresh() end
 end
 
@@ -488,10 +491,9 @@ local function routePoints(tiles, origin, upTo)
     return positions
 end
 
--- The route last asked for, as a key. The route is worked out again whenever the forest changes, and the key is kept
--- through trimming, so the same route asked for again (while the player follows it) leaves the trimmed ribbon alone
--- instead of remaking it.
-local routeShownKey = nil
+-- The tiles last drawn, kept so the same route asked for again on a refresh is left as it is: still being drawn, or
+-- trimmed.
+local routeShownTiles = nil
 
 -- Returns a new entity for the route on its origin tile, in its style.
 local function newRouteEntity(name)
@@ -520,7 +522,7 @@ local restShownKey = nil -- the corner and the corners after it that routeEntity
 -- changes from tile to tile, so it is an entity of its own, reshaped each step, and the rest is reshaped only as a
 -- corner is passed. Entities are kept rather than remade, as remaking one makes it blink and costs a frame. A route
 -- still being drawn is left to finish.
-function Highlights.trimRoute(tiles)
+function trimRoute(tiles)
     if routeEntity == nil or routeBuild ~= nil then return end
     -- the point where the run the player is on ends, at the first corner that is not the player's own tile
     local cornerAt, corner = 1, nil
@@ -552,22 +554,14 @@ function Highlights.trimRoute(tiles)
     segmentEntity:SetShapeData(ribbonBetween(edges, 1, cornerAt))
 end
 
-local function routeKey(tiles, colour)
-    if tiles == nil then return nil end
-    local parts = { tostring(colour), tostring(beamTarget) }
-    for _, tile in ipairs(tiles) do parts[#parts + 1] = tile.x .. "," .. tile.z end
-    return table.concat(parts, " ")
-end
-
 -- Draws the chosen route on the ground. A route already drawn takes the new one's shape in
 -- place, its entities kept and its origin tile too, so what both routes share is drawn where it was.
 -- Only the first route is made from scratch, a few tiles a frame.
-function Highlights.showRoute(tiles, colour)
-    local key = routeKey(tiles, colour)
-    if routeEntity ~= nil and key == routeShownKey and not Settings.hideRouteInWorld then return end
-    routeShownKey, restShownKey = key, nil
-    stopBuilding()
+function showRoute(tiles, colour)
     local visible = tiles ~= nil and not Settings.hideRouteInWorld
+    if visible and tiles == routeShownTiles and routeEntity ~= nil then return end
+    routeShownTiles, restShownKey = tiles, nil
+    stopBuilding()
     -- with only the player's tile left and no step onto the target, the ribbon is kept until the route changes
     if visible and routeEntity ~= nil and (#tiles >= 2 or stepOntoTarget(tiles[1]) ~= nil) then
         if routeColour ~= colour then
@@ -575,7 +569,7 @@ function Highlights.showRoute(tiles, colour)
             routeEntity.colour = colour
             if segmentEntity ~= nil then segmentEntity.colour = colour end
         end
-        return Highlights.trimRoute(tiles)
+        return trimRoute(tiles)
     end
     dropSegment()
     if routeEntity ~= nil then
@@ -596,7 +590,7 @@ function Highlights.showRoute(tiles, colour)
 end
 
 function Highlights.clear()
-    Highlights.showRoute(nil)
+    showRoute(nil)
     for name, highlight in pairs(shown) do destroyHighlight(name, highlight) end
     shapes = {}
 end

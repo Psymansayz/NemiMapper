@@ -20,7 +20,7 @@ for _, toolPair in ipairs(ForestFeatures.tools) do
     if toolPair.toolItem ~= nil then itemOfSourceKey[sourceKey] = GameIds.resolve("Obj", toolPair.toolItem) end
 end
 
-local heldBefore = {} -- source key -> true: tools held at the last update
+local carriedBefore = {} -- source key -> true: tools carried at the last refresh
 local usedAt = {} -- source key -> the server tick its tool was used on its barrier
 
 -- Returns the barrier of sourceKey's puzzle if it still stands near the player.
@@ -46,22 +46,19 @@ local function toolsCarried()
     return held
 end
 
--- Notes the tools just lost beside their barriers, on each inventory change.
-function ToolsHeld.update()
-    local held = toolsCarried()
-    for sourceKey in pairs(heldBefore) do
-        if not held[sourceKey] and barrierNear(sourceKey) then usedAt[sourceKey] = Forest.ticks end
-    end
-    heldBefore = held
-end
-
 -- The source keys of the puzzles whose tool the player has (source key -> true), counting a tool still opening its
 -- barrier, as at the last refresh.
 ToolsHeld.held = {}
 
--- Works out the tools held again, on each step, inventory change and forest change. Returns whether they changed.
+-- Works out the tools held again, on each step, inventory change and forest change, noting the tools just lost
+-- beside their barriers. Returns whether they changed.
 function ToolsHeld.refresh()
-    local held = toolsCarried()
+    local carried, held = toolsCarried(), {}
+    for sourceKey in pairs(carriedBefore) do
+        if not carried[sourceKey] and barrierNear(sourceKey) then usedAt[sourceKey] = Forest.ticks end
+    end
+    carriedBefore = carried
+    for sourceKey in pairs(carried) do held[sourceKey] = true end
     for sourceKey, tick in pairs(usedAt) do
         local barrier = barrierOfSourceKey[sourceKey]
         if not Forest.doorsGone[barrier.key] and Forest.ticks - tick <= OPENING_TICKS then held[sourceKey] = true end
@@ -73,7 +70,7 @@ end
 
 -- Forgets the tools held and used, on leaving the forest.
 function ToolsHeld.forget()
-    heldBefore, usedAt, ToolsHeld.held = {}, {}, {}
+    carriedBefore, usedAt, ToolsHeld.held = {}, {}, {}
 end
 
 return ToolsHeld

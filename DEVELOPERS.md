@@ -88,7 +88,7 @@ plugin load (main.lua)
               │               Highlights.refreshWith, FullForestAlert.check
               ├─ onMoved    → MapWindow.showPlayer; RouteChoice.showPlayer (route follows), or if the tools held
               │               changed: RouteChoice.showHeld, MapWindow.showHeld, Highlights.refreshWith
-              ├─ onInventoryChanged → ToolsHeld.update (tools used on barriers), then if the tools held changed:
+              ├─ onInventoryChanged → if the tools held changed (ToolsHeld.refresh, which notes tools used):
               │               RouteChoice.showHeld, MapWindow.showHeld, Highlights.refreshWith
               ├─ onNpcMoved → RouteChoice.showNpcMoved, MapWindow.showNpcMoved
               └─ onLeft     → close the windows not open before entering (the map shows as it did then), clear
@@ -224,8 +224,9 @@ walkable tiles (`zone_walkability`), turned the same way. A zone whose turn matt
 grid unsettled: one with no heights, or whose heights match turns that differ in walkable tiles equally well. Such a
 tie takes one of those turns meanwhile, and the zone (`grid.tiedZones`) is read again on each zone the player
 enters, as a read from nearer may hold what one from afar lacked. The heights are compared through a table of where each tile goes per turn (`turnedIndex`), with no
-turned copies, and each zone's turn is kept by its heights, which never change once read; the turned walkable tiles
-are cached by template. Both are dropped on leaving. A build whose turns match the last grid's returns that grid.
+turned copies, and the turned walkable tiles are cached by template, dropped on leaving. Each zone's turns are
+matched again on every build: under a millisecond for a whole forest, and builds happen only as heights are read, so
+they are not kept. A build whose turns match the last grid's returns that grid.
 
 Searches cache data on the grid itself (`grid.steps`, `grid.stopDistances`), which is why a build matching the last
 grid returns it. Heights read on a step reach the grid on the same server tick.
@@ -302,7 +303,7 @@ Flow:
 2. `showForest` (each `onChanged`) places the zone pictures, the markers, the signs and the legends' counts, and paints
    the routes.
 3. `MapLayer.paintRoutes` draws the chosen route from the player on, or with nothing chosen the final route
-   (`final_route.lua`), worked out once per entry on the server tick after the search ends and the grid settles.
+   (`final_route.lua`), worked out once per entry when first asked for after the search ends and the grid settles.
    `showRoutes` adds the legend's pressed buttons and outlines and the icons shown only as the route's stops. A canvas
    can only be cleared whole, so the piece the player walks along has a canvas of its own (`routeStart`), and the
    rest (`routes`) is drawn again only when it changes: a corner passed, another route, or the map's size
@@ -331,7 +332,8 @@ only under a window's content or the plugin layer, and the button is made with `
   one goes, within the same call. `showChosen` takes the chosen route and refreshes only when its target or stops
   change; `refreshWith` takes it and refreshes, after a change to the forest or the tools held.
 - The chosen route is a flat ribbon on the ground (`routeEntity`, plus `segmentEntity` for the straight run the
-  player is on), reshaped in place as the player walks (`trimRoute`).
+  player is on), reshaped in place as the player walks (`trimRoute`). A refresh draws what is left ahead of the
+  player, and leaves the ribbon alone when given the same tiles again.
 
 ### The scout window and the alert
 `ScoutWindow` shows `Forest.scoutCounts()`: the node kinds found, plus kinds the rotation shows were missed once
@@ -354,7 +356,6 @@ when every kind is present (or, by a setting, every kind still unclaimed today: 
 | Event | Subscribed | Work |
 |---|---|---|
 | `ServerLogic` | While a region is watched | `onServerTick` (forest). |
-| `ServerLogic` | For one tick, once the search has ended | The final route (`final_route.lua`). |
 | `LocAdded`, `LocRemoved`, `NPCEntityAdded`, `VarTransmit`, `InventoryUpdated` | While a region is watched | The forest's changes. |
 | `Logic` (50/s) | While an NPC is highlighted | `followTracked` moves its box. |
 | `Logic` (50/s) | During the 5 s alert | The flash. |

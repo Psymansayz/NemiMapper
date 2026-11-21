@@ -393,7 +393,7 @@ end
 -- Reads the standing heights of zones not read yet, and returns whether any zone was read.
 -- A zone reads as nothing standing until the client loads its models, which for a far zone waits until the player
 -- comes nearer, so it is retried as the player moves.
-local tiedZones = {} -- the zones whose heights matched turns equally well when last built (ForestGrid.build)
+local builtGrid = nil -- the last grid built, held back from Forest.grid until settled or due
 
 -- Returns whether two zones' standing heights differ.
 local function heightsDiffer(first, second)
@@ -411,7 +411,8 @@ local function readStanding()
     for _, zone in ipairs(Forest.zones) do
         local zoneKey = zone.x .. "," .. zone.z
         local known = Forest.standingByZone[zoneKey]
-        if (known == nil or tiedZones[zoneKey]) and ForestGrid.hasStanding(zone.templateKey) then
+        local tied = builtGrid ~= nil and builtGrid.tiedZones[zoneKey]
+        if (known == nil or tied) and ForestGrid.hasStanding(zone.templateKey) then
             local standing = StandingHeights.read(level, zone.x, zone.z)
             if standing ~= nil and (known == nil or heightsDiffer(standing, known)) then
                 Forest.standingByZone[zoneKey], anyRead = standing, true
@@ -465,7 +466,6 @@ end
 -- whose turn matters turned by its heights) or GRID_WAIT_TICKS have passed since entering, so the map's zones, the
 -- routes and the plans are not worked out on the unturned zones of the first ticks, while the zones load.
 local GRID_WAIT_TICKS = 6 -- about four seconds; at High draw distance (raised on entering) the zones load in 3 ticks
-local builtGrid = nil -- the last grid built, held back from Forest.grid until settled or due
 local gridDueTick = 0 -- the server tick from which an unsettled grid is used
 
 local function publish()
@@ -570,7 +570,7 @@ local function forgetForest()
     Forest.found, Forest.countOf, Forest.doorsGone, Forest.following = {}, {}, {}, {}
     Forest.keysTaken, playersRemoved = {}, false
     Forest.standingByZone = {}
-    Forest.grid, builtGrid, Forest.zoneTurns, tiedZones = nil, nil, nil, {}
+    Forest.grid, builtGrid, Forest.zoneTurns = nil, nil, nil
     Forest.playerTile, Forest.entryTile = nil, nil
     Forest.monstersSpawned = 0
     npcsFound, monstersSeen, taskItemsHeld, itemsHeldNow = {}, {}, {}, nil
@@ -737,7 +737,6 @@ local function onServerTick()
     if gridStale then
         gridStale = false
         local grid = ForestGrid.build(Forest.zones, Forest.bounds, Forest.standingByZone, builtGrid)
-        tiedZones = grid.tiedZones
         if grid ~= builtGrid then builtGrid, Forest.zoneTurns, foundChanged = grid, grid.turns, true end
     end
     -- an unsettled grid is held back until gridDueTick
