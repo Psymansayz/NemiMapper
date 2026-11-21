@@ -146,15 +146,6 @@ local function showKeysUnseen(map, keysUnseen, colour)
     end
 end
 
--- Returns the final route's pieces, once worked out, asking for them while the map shows it with nothing chosen.
-local function finalRoutes(map)
-    return FinalRoute.routes(function()
-        if not map.isOpen() then return false end
-        MapView.newRedraw()
-        return view().finalRoute and not RouteChoice.isChosen()
-    end, function() MapLayer.paintRoutes(map) end)
-end
-
 -- Draws the chosen route in its target's colour, from the player on, or the final route in white when none is chosen
 -- and it is on.
 -- A canvas can only be cleared whole, so the piece the player walks along has a canvas of its own (routeStart), and
@@ -175,7 +166,7 @@ function MapLayer.paintRoutes(map)
         return drawRoute(map, count, drawn.colour, false, map.routeStart, map.routes)
     end
     local final = drawn == nil and Forest.grid ~= nil and view().finalRoute and not RouteChoice.isChosen()
-        and finalRoutes(map) or EMPTY
+        and FinalRoute.routes() or EMPTY
     local rest = tostring(final) .. "," .. scale
     if map.restPainted == rest then return end
     map.restPainted = rest

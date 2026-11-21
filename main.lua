@@ -92,7 +92,7 @@ Forest.onLeft = function()
     RouteChoice.forget()
     FinalRoute.forget()
     ScoutWindow.showForest() -- the windows kept open, after those closing have saved their size as it was
-    MapWindow.showForestLeft()
+    MapWindow.showForest()
     Highlights.clear()
     ForestStops.forget()
     ToolsHeld.forget()
@@ -121,7 +121,6 @@ Forest.onNpcMoved = function(entry)
 end
 
 Forest.onInventoryChanged = function()
-    ToolsHeld.update()
     if ToolsHeld.refresh() then showHeld() end
 end
 
@@ -139,11 +138,8 @@ SettingsPage.onChange = {
         -- The header shows the world, readable only while the friends list is loaded.
         if Settings.mapSharingMode then WorldNumber.read() end
         MapWindow.showSettings()
-        ScoutWindow.showSettings()
     end,
 }
--- The map's sharing button turns map sharing mode on or off, and the settings pages follow.
-MapWindow.onSharingToggled = function() SettingsPage.change("mapSharingMode", not Settings.mapSharingMode) end
 
 WorldNumber.read()
 Forest.start()

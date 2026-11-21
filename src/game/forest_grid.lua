@@ -42,17 +42,12 @@ local function turnedTiles(values, quarterTurns)
     return turnedValues
 end
 
--- A zone's heights never change once read, so its turns are worked out once: its heights -> its turns.
-local turnsOfStanding = {}
-
 -- Returns the clockwise quarter turns that best match the template zone sourceKey's standing heights to
 -- standing, as a list: more than one when several match equally well.
 -- The forest replaces a few tiles (nodes, barriers) and a zone read from afar lacks small plants, but the turn with the
 -- most matching tiles still stands out.
 local function turnsByStanding(sourceKey, standing)
     if standing == nil then return nil end
-    local known = turnsOfStanding[standing]
-    if known ~= nil then return known end
     local template = TemplateStanding[sourceKey]
     local bestTurns, bestAlike = {}, -1
     for quarterTurns = 0, 3 do
@@ -66,7 +61,6 @@ local function turnsByStanding(sourceKey, standing)
             bestTurns[#bestTurns + 1] = quarterTurns
         end
     end
-    turnsOfStanding[standing] = bestTurns
     return bestTurns
 end
 
@@ -170,10 +164,10 @@ function Grid:tile(index)
     return self.minX + offset % self.width, self.minZ + offset // self.width
 end
 
--- Drops the template zones' turned tiles and the zones' turns on leaving a forest.
+-- Drops the template zones' turned tiles on leaving a forest.
 -- The next grid makes them again from the data, which is why the walkability rows are kept.
 function ForestGrid.forgetTemplates()
-    groundTurnsCache, turnsOfStanding = {}, {}
+    groundTurnsCache = {}
 end
 
 return ForestGrid

@@ -3,7 +3,6 @@
 
 local ForestFeatures = require("src/data/forest_features")
 local Forest = require("src/game/forest")
-local FinalRoute = require("src/game/final_route")
 local WorldNumber = require("src/game/world_number")
 local Settings = require("src/data/settings")
 local ComponentWrites = require("src/ui/component_writes")
@@ -16,6 +15,7 @@ local LegendWindows = require("src/ui/legend_windows")
 local WindowPlace = require("src/ui/window_place")
 local StatusText = require("src/ui/status_text")
 local SharingButton = require("src/ui/sharing_button")
+local SettingsPage = require("src/ui/settings_page")
 
 local MapWindow = {}
 
@@ -38,7 +38,6 @@ local COMPASS_SIZE = 50 -- as on the pack's frame, over the corner of the frame 
 local COMPASS_RING_PIXELS, COMPASS_BACKING_PIXELS, COMPASS_NEEDLE_PIXELS = 41, 33, 51
 local HEADER_FONT = id.Font.MUSEO_SANS_19PT_BOLD
 local RESIZE_END_SUBSCRIPTION = "nemi_mapper_map_resize_end"
-MapWindow.onSharingToggled = nil -- called when the title bar's sharing button is clicked
 
 -- The open window, or nil. It holds the window, the frame's layout and its parts, shared with the modules that draw
 -- them.
@@ -285,7 +284,6 @@ local function release()
     WindowPlace.remember(parts.window.root, "map")
     LegendWindows.release(parts)
     parts = nil
-    FinalRoute.stopWaiting()
     Event.Draw.Unsubscribe(RESIZE_END_SUBSCRIPTION)
 end
 
@@ -363,7 +361,9 @@ function MapWindow.open(PrettyUI, pluginLayer)
         if not LegendWindows.anyShown(parts) then return closeWindow(closingWindow) end
         LegendWindows.hideWindow(closingWindow)
     end
-    parts.sharingButton = SharingButton.add(PrettyUI, window, function() MapWindow.onSharingToggled() end)
+    parts.sharingButton = SharingButton.add(PrettyUI, window, function()
+        SettingsPage.change("mapSharingMode", not Settings.mapSharingMode)
+    end)
     build(LegendWindows.open(parts))
     -- A window's content takes its new size a moment after a resize, so the layout uses the size passed to
     -- SetSize, which PrettyUI's resize handle calls on each step of a drag.
@@ -401,11 +401,6 @@ function MapWindow.showHeld()
     MapLayer.placeMarkers(parts)
     MapLayer.paintRoutes(parts)
     showCounts()
-end
-
--- Called when the forest is left: it is gone, so the map shows none entered.
-function MapWindow.showForestLeft()
-    if isOpen() then showForest() end
 end
 
 -- Called when the player's tile changes: the player marker follows. The chosen route follows by MapWindow.showRoutes.

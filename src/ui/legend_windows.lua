@@ -19,7 +19,7 @@ local LEAST_ROW_HEIGHT = 16
 local CLOSE_SUBSCRIPTION = "nemi_mapper_map_close"
 
 -- A puzzle legend window is at least as wide as the frame's smallest map and legend.
-LegendWindows.PUZZLE_LEAST_WIDTH = EDGE + MapWidgets.MINIMUM_MAP_SIZE
+local PUZZLE_LEAST_WIDTH = EDGE + MapWidgets.MINIMUM_MAP_SIZE
     + NodeLegend.clampedWidth(MapWidgets.MINIMUM_MAP_SIZE * NodeLegend.TO_MAP, NodeLegend.MINIMUM_WIDTH) + EDGE_WIDTH
 
 local LEGEND_DEFAULT_WIDTH = NodeLegend.clampedWidth(MapWidgets.DEFAULT_MAP_SIZE * NodeLegend.TO_MAP,
@@ -30,7 +30,7 @@ local WINDOWS = {
         minWidth = NodeLegend.MINIMUM_WIDTH + EDGE_WIDTH, minHeight = MapWidgets.MINIMUM_MAP_SIZE + EDGE_HEIGHT },
     { host = "puzzleHost", place = "puzzleLegend", title = "Puzzle legend",
         width = EDGE + MapWidgets.DEFAULT_MAP_SIZE + LEGEND_DEFAULT_WIDTH + EDGE_WIDTH,
-        under = true, minWidth = LegendWindows.PUZZLE_LEAST_WIDTH }, -- open sets its height
+        under = true, minWidth = PUZZLE_LEAST_WIDTH }, -- open sets its height
 }
 
 -- Hides a window without destroying it, as PrettyUI's Close does without destroyOnClose.
@@ -163,7 +163,7 @@ function LegendWindows.fit(map)
         local leastWidth = shows.simpleLegends
             and math.max(1, #MapView.shownPuzzles()) * PuzzleLegend.SIMPLE_PAIR_LEAST_WIDTH + EDGE
                 + PuzzleLegend.SIMPLE_SOLVE_WIDTH + EDGE_WIDTH
-            or LegendWindows.PUZZLE_LEAST_WIDTH
+            or PUZZLE_LEAST_WIDTH
         local leastHeight = PuzzleLegend.height() + EDGE_HEIGHT
         WindowPlace.setMinimumSize(window, leastWidth, leastHeight)
         if window.root.width < leastWidth or window.root.height < leastHeight then
