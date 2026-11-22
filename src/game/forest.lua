@@ -364,7 +364,7 @@ local function noteNpc(npcEntity)
     for _, known in ipairs(npcsFound) do
         if known.feature == feature then return end
     end
-    local coord = npcEntity.coordGrid
+    local coord = npcEntity.routeEnd
     npcsFound[#npcsFound + 1] = {
         feature = feature, x = coord.x + 0.5, z = coord.z + 0.5, width = 1, length = 1, isNpc = true,
         npcID = npcEntity.configID,
@@ -654,11 +654,10 @@ end
 -- Moves each found NPC's marker to its tile once a server tick, so its route ends at it.
 local function followNpcs()
     for _, entry in ipairs(npcsFound) do
-        -- the forest has one of each, listed only while in view
         local npcEntity = NPCList.ByConfigID(entry.npcID)[1]
         if npcEntity ~= nil then
             entry.npcEntity = npcEntity
-            local coord = npcEntity.coordGrid
+            local coord = npcEntity.routeEnd
             local x, z = coord.x + 0.5, coord.z + 0.5
             if entry.x ~= x or entry.z ~= z then
                 entry.x, entry.z = x, z
@@ -668,11 +667,10 @@ local function followNpcs()
     end
 end
 
--- Runs once per server tick while a region is watched: waits until the region is recognised as the forest, then
--- scans until the search settles, and follows the player.
+-- Runs once per server tick while a region is watched:
+-- scans until the search settles, and routes follow the player.
 local function onServerTick()
     Forest.ticks = Forest.ticks + 1
-    -- a tick with nothing new announced completes the announcement
     if not announcementsEnded and announcedInBurst and not announcedThisTick then announcementsEnded = true end
     announcedThisTick = false
     announcingTicksLeft = announcingTicksLeft - 1
@@ -688,11 +686,7 @@ local function onServerTick()
         if region == nil then return end
         enter(region)
     end
-    -- the scans read the player's level, and the player is briefly unavailable while the world changes
     if not Player.IsAvailable() then return end
-    -- While the forest settles, the zones' heights and the NPCs are read each tick, and the locations too until
-    -- something is announced; after that the locations' changes come as events, and NPCs are looked for when some
-    -- arrive.
     if settlingTicksLeft > 0 then
         settlingTicksLeft = settlingTicksLeft - 1
         scan()
@@ -700,14 +694,12 @@ local function onServerTick()
         scanNpcs()
     end
     npcsArrived = false
-    -- the search ending is a change too, as the windows show whether it is still going; it does not come back
+    -- the search ending is a change too, as the windows show whether it is still going;
     if Forest.isSearching and (announcementsEnded or settlingTicksLeft <= SETTLING_TICKS - SHOWN_SETTLED_AFTER) then
         Forest.isSearching, foundChanged = false, true
     end
     readDialogue()
     freeKeysOfPlayersGone()
-    -- The player's tile first, so what follows works from where the player is now, and the heights read on stepping
-    -- into a new zone reach the grid on this tick.
     followPlayer()
     followNpcs()
     -- heights read by a scan or a step may change the grid without a find
@@ -721,13 +713,11 @@ local function onServerTick()
         Forest.grid, foundChanged = builtGrid, true
     end
     if foundChanged then publish() end
-    -- After a reload only the scans find the nodes, keys and doors, so the draw distance stays up until they settle
-    -- too, as the client lets far squares go below Medium.
     if Forest.grid ~= nil and (not announcementMissed or settlingTicksLeft == 0) then DrawDistance.restore() end
 end
 
 -- Listens for added locations from the region's creation.
--- isNew is false when the plugin loaded inside the forest, after its announcement.
+-- isNew is false when the plugin loaded inside the forest.
 local function watchRegion(isNew)
     arrivalTicksLeft = ARRIVAL_TICKS
     announcementMissed = not isNew
@@ -738,18 +728,12 @@ local function watchRegion(isNew)
     Event.LocRemoved.Subscribe(SUBSCRIPTION, onLocationRemoved)
 end
 
--- Returns the active Trinks' tasks that are NPCs and not yet seen, as NPCs only load near the player.
-function Forest.tasksUnseen()
-    local unseen = {}
-    for _, task in ipairs(ForestFeatures.trinksTasks) do
-        if task.npcs ~= nil and (Forest.countOf[task.key] or 0) == 0 and Forest.isTaskActive(task) then
-            unseen[#unseen + 1] = task
-        end
-    end
-    return unseen
+-- Returns whether the Traitor's task is active and the Traitor hasn't been seen yet.
+function Forest.isTraitorUnseen()
+    return (Forest.countOf.traitor or 0) == 0 and Forest.isTaskActive(ForestFeatures.byKey.traitor)
 end
 
--- Returns the puzzles whose barrier is found but not its key, as NPC keys only load near the player.
+-- Returns the puzzles whose barrier is found but not its key
 function Forest.keysUnseen()
     local unseen = {}
     for _, toolPair in ipairs(ForestFeatures.tools) do
@@ -769,9 +753,8 @@ function Forest.barriersLeft()
     return false
 end
 
--- The nodes the rotation (ForestFeatures.nodeRotation) says were missed: for each pair of found nodes adjacent in
+-- The nodes the ordering (ForestFeatures.nodeRotation) says were missed: for each pair of found nodes adjacent in
 -- reading order (zone rows south to north, each west to east), the features of the kinds skipped between them.
--- A node missed before the first or after the last cannot be detected.
 local rotationFeatures, rotationIndexOf = ForestFeatures.nodesInRotation, {}
 for index, node in ipairs(rotationFeatures) do rotationIndexOf[node.key] = index - 1 end
 function Forest.nodesMissedByRotation()
@@ -799,9 +782,6 @@ function Forest.nodesMissedByRotation()
     return missed
 end
 
--- Returns the scout window's counts: node kinds found, plus kinds the rotation says were missed and none was found
--- of (once the search settles); the missed nodes' features in rotation order; and the kinds counted as missed
--- (key -> true).
 function Forest.scoutCounts()
     local kinds = Forest.nodeCounts()
     local missed, missedKinds = Forest.isSearching and {} or Forest.nodesMissedByRotation(), {}
@@ -814,11 +794,9 @@ function Forest.scoutCounts()
     return kinds, missed, missedKinds
 end
 
--- Returns whether the forest has every node kind, from the scout window's counts, or with neededOnly every kind still
--- unclaimed today.
+-- Returns true when we should trigger scouting alerts.
 function Forest.isFull(kinds, missedKinds, neededOnly)
     if kinds >= #ForestFeatures.nodes then return true end
-    -- which nodes the forest has is known only once the search settles
     if not neededOnly or Forest.isSearching then return false end
     local needed = 0
     for _, node in ipairs(ForestFeatures.nodes) do
@@ -847,7 +825,6 @@ function Forest.start()
         watchRegion(true)
     end)
     Event.WorldCreated.Subscribe(SUBSCRIPTION, stopWatching)
-    -- the plugin may load with the player already in the forest
     if World.IsAvailable() and World.IsRegion() then watchRegion(false) end
 end
 

@@ -5,11 +5,10 @@ local Settings = require("src/data/settings")
 local Keybinds = require("src/ui/keybinds")
 local WindowPlace = require("src/ui/window_place")
 local StatusText = require("src/ui/status_text")
-local Colours = require("src/ui/colours")
 
 local SettingsPage = {}
 
-local SECTION_COLOUR = Colours.GOLD
+local SECTION_COLOUR = StatusText.GOLD
 local SECTION_FONT = id.Font.CINZEL_18PT_BOLD
 local SECTION_HEIGHT = 30 -- room for the 18pt heading
 local PARAGRAPH_GAP = 18 -- a blank line between the settings' how-to paragraphs

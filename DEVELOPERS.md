@@ -49,8 +49,7 @@ dependency, see `plugin.json`). The `main` branch is the release; `dev` has the 
 | | `scout_window.lua` | The scout window: node kinds found, counts, monsters left. |
 | | `full_forest_alert.lua` | The green flash and the click block on a 9/9 forest. |
 | | `sharing_button.lua` | The map title bar's sharing-mode button. |
-| | `colours.lua` | The green, gold and red the windows and the hub page share. |
-| | `status_text.lua` | A text that writes its content and colour only when they change. |
+| | `status_text.lua` | A text that writes its content and colour only when they change, and the shared status colours. |
 | | `window_place.lua` | Saves and restores a window's place and size. |
 | `resources` | `*.png` | Icons for features and signs, and `zone_<x>_<z>.png` pictures of each template zone for the map. |
 
@@ -278,7 +277,7 @@ One route is chosen at a time, map open or not: `RouteChoice.choice` is nil, `{ 
 and `clear`. `startMappingAfterSearch` presses NAVIGATE once the search ends, unless a route was chosen or dropped
 before. `update` works the route out (`chosenRoute`): a plan's next stop
 for NAVIGATE or SOLVE, or a route to the thing clicked; a target behind a door becomes a small plan toward it. It
-keeps the result in `RouteChoice.drawn` (`{ tiles, colour, target, stops, keysUnseen, ahead, trimmedX, trimmedZ }`)
+keeps the result in `RouteChoice.drawn` (`{ tiles, colour, target, stops, unseen, ahead, trimmedX, trimmedZ }`)
 and calls `RouteChoice.onDrawn`, which main.lua hands to the highlights and the map. It runs
 again when the forest, the choice or the tools held (`ToolsHeld.held`) change; on each step `showPlayer` cuts the
 route back to the player's nearest point on it (`ahead`, `onDrawn(true)`), and straying more than three tiles works
@@ -365,7 +364,6 @@ when every kind is present (or, by a setting, every kind still unclaimed today: 
 | `LocAdded`, `LocRemoved`, `NPCEntityAdded`, `VarTransmit`, `InventoryUpdated` | While a region is watched | The forest's changes. |
 | `Logic` (50/s) | While an NPC is highlighted | `followTracked` moves its box. |
 | `Logic` (50/s) | During the 5 s alert | The flash. |
-| `Draw` (per frame) | While the first ground route builds | 12 tiles a frame. |
 | `Draw` (per frame) | During a map resize drag | Fits the window on release. |
 | `Draw` (per frame) | For one frame after the alert's unblock button is clicked | Removes the button. |
 | `Draw` (per frame) | For one frame after the map's sharing button is clicked | Turns map sharing mode on or off. |

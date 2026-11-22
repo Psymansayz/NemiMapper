@@ -1,6 +1,11 @@
--- A text that writes its content and colour only when they change.
+-- A text that writes its content and colour only when they change, and the status colours the windows and the hub
+-- page share.
 
 local StatusText = {}
+
+StatusText.GREEN = 0x7DDC5AFF -- complete
+StatusText.GOLD = 0xF2C66DFF -- incomplete, the settings' headings and hints
+StatusText.RED = 0xE0433A00 -- a node absent but still unclaimed today; add an alpha
 
 function StatusText.new(text)
     return { text = text }

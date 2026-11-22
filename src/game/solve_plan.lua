@@ -30,9 +30,6 @@ end
 local function stopKey(stop) return stop.kind .. stop.x .. "," .. stop.z end
 
 -- Returns the distances from a stop to each of stops, searching only when one is not known.
--- Stops stay put, so replanning after the player moves, takes a key or claims a node only searches from the player.
--- With the same barriers shut (doorsKey), a stop's search always has the same blocked tiles (blockedFor(stop)), so
--- distances are kept by stop until a barrier opens.
 local function distancesFromStop(grid, stop, stops, doorsKey, blockedFor)
     local cache = grid.stopDistances
     if cache == nil or cache.doorsKey ~= doorsKey then
@@ -56,21 +53,14 @@ local function distancesFromStop(grid, stop, stops, doorsKey, blockedFor)
     return distances
 end
 
--- Returns the stop to go to first, and the search from the player with every barrier shut (Routes.search with
--- parents), for the route to that stop.
--- remembered: the cheapest tours from each stop, kept by the caller for the same stops and barriers. Only the first
--- stop depends on where the player is, so a plan worked out again from elsewhere reuses them.
--- stops: [n] = { kind = "key" or "door", x, z (the feature's tile), tiles (every tile it stands on), needs = the
--- key stop a door needs, or nil when the key is held, group = a node's key, shared by its copies, optional = true
--- for a stop the tour may leave out }.
--- player: { x, z }. alwaysBlocked: tile index -> true for tiles never to cross (barriers that are not stops).
+-- Returns the first stop of the shortest tour from player through stops, and the search from player for its route.
+-- remembered holds the tours from each stop, which don't depend on where the player is.
 function SolvePlan.nextStop(grid, player, stops, alwaysBlocked, remembered)
     local stopCount = #stops
     if stopCount == 0 then return nil end
     local indexOf = {}
     for index, stop in ipairs(stops) do indexOf[stop] = index end
-    -- One claim uses every copy of a node, so visiting one copy visits its group: groupBits[n] is stop n's bit and
-    -- its copies'.
+    -- One claim uses every copy of a node, so visiting one copy visits all copies.
     local bitsOfGroup, groupBits = {}, {}
     for index, stop in ipairs(stops) do
         if stop.group ~= nil then bitsOfGroup[stop.group] = (bitsOfGroup[stop.group] or 0) | (1 << index) end
@@ -134,11 +124,7 @@ function SolvePlan.nextStop(grid, player, stops, alwaysBlocked, remembered)
     for index, stop in ipairs(stops) do
         if not stop.optional then requiredMask = requiredMask | (1 << index) end
     end
-    -- The cheapest way to visit the rest from a stop, cached by the stop and the stops visited, and the stop to go
-    -- to next.
-    -- A required stop left unvisited costs MISSED, so a tour takes every one some order can reach before it counts
-    -- tiles.
-    -- The rest, out of reach or behind a door whose key is behind that door, are left out.
+    -- The cheapest way to visit the rest from a stop, and the stop to go to next.
     remembered = remembered or {}
     local function cheapest(at, visitedMask)
         if visitedMask & requiredMask == requiredMask then return 0 end
