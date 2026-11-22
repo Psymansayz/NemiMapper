@@ -2,7 +2,6 @@
 -- outlines and buttons in the frame's colours and fonts.
 
 local IconSizes = require("src/data/icon_sizes")
-local Colours = require("src/ui/colours")
 local ComponentWrites = require("src/ui/component_writes")
 local StatusText = require("src/ui/status_text")
 
@@ -26,7 +25,7 @@ local PATHS_ICON_SPRITE = id.Sprite.RS3_ICON_MENU_PATHS_0
 local BUTTON_COLOUR = 0x1B4A6BFF -- in the frame's blues
 local BUTTON_DOWN_COLOUR = 0x2F7FB3FF
 local BUTTON_OVER_COLOUR = 0x245E88FF
-local HINT_COLOUR = Colours.GOLD -- "Walk to find"
+local HINT_COLOUR = StatusText.GOLD -- "Walk to find"
 local HOVER_COLOUR = 0xFFFFFFFF -- outline of a clickable row or pair under the mouse
 local DIMMED_ALPHA = 0.3 -- legend entries absent from the forest, and finished puzzles
 

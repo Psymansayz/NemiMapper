@@ -11,9 +11,6 @@ local ORTHOGONAL_STEPS = 4 -- the first four
 
 -- Returns a tile's steps, as a flat list of triples: the walkable tile stepped to and the two side tiles a diagonal
 -- passes between (0 for an orthogonal step).
--- They are cached on the grid on first use, as a grid's walkable tiles never change and working out steps in every
--- search would take most of its time.
--- Unwalkable tiles have steps too, as a search may start on a target's own tiles.
 local function stepsFrom(grid, index)
     local x, z = grid:tile(index)
     local list = {}
@@ -33,7 +30,6 @@ end
 local NONE = {}
 
 -- Returns a breadth-first search from startTiles: each tile's distance and the tile it was reached from
--- (left out with distancesOnly).
 -- blocked: tile index -> true for extra tiles not to cross.
 local function search(grid, startTiles, blocked, distancesOnly)
     local distance, parent, queue = {}, not distancesOnly and {} or nil, {}
@@ -67,10 +63,7 @@ local function search(grid, startTiles, blocked, distancesOnly)
     return { grid = grid, distance = distance, parent = parent }
 end
 
--- Returns the walkable tiles a target is used from: those orthogonally beside it, as the game does not allow using
--- doors, keys or nodes diagonally. The game places every target with at least one.
--- target: a tile (x, z), with tiles listing every tile it stands on when there are several.
--- A search never reaches a blocked tile, so the nearest of these is never one.
+-- Returns the walkable tiles a target can be reached from.
 local function tilesRound(grid, target)
     local footprint, onTarget = target.tiles or { target }, {}
     for _, tile in ipairs(footprint) do onTarget[grid:index(tile.x, tile.z)] = true end
@@ -129,13 +122,7 @@ local function wayBack(found, index, stopAt)
     return tiles
 end
 
--- Returns the final route: the ways from the entrance to each reachable node and to the exit, as a
--- list of routes, each a list of tiles: the farthest first, whole from the entrance, then each other from where it
--- leaves the tree to its end.
--- Searching each leg apart can find other equally short ways through open ground, which would draw loops and
--- parallel lines, so the ways come from one search and form a tree, with no way drawn twice or alongside another.
--- Nodes shut in by rocks or behind a barrier the final route ignores, and an unreachable exit, are left out, so
--- every piece drawn can be walked.
+-- Returns the final route: the path from each entrance to each node and the pahtli plant.
 function Routes.finalRoute(grid, entrance, exit, nodeTiles)
     local found = search(grid, { entrance })
     local targets = {}

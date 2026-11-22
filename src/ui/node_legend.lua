@@ -6,10 +6,10 @@ local ForestFeatures = require("src/data/forest_features")
 local IconSizes = require("src/data/icon_sizes")
 local Forest = require("src/game/forest")
 local RouteChoice = require("src/game/route_choice")
-local Colours = require("src/ui/colours")
 local ComponentWrites = require("src/ui/component_writes")
 local MapWidgets = require("src/ui/map_widgets")
 local MapView = require("src/ui/map_view")
+local StatusText = require("src/ui/status_text")
 
 local NodeLegend = {}
 
@@ -27,10 +27,8 @@ local LARGEST_ICON_SCALE = 1.25
 local LARGEST_SIMPLE_ICON_SCALE = 2
 local SIMPLE_ICON_INSET = 2 -- the gap kept round a simplified row's picture, inside the row's outline
 local NAME_TO_ROW = 0.5 -- a name's font is at most this share of its row, so it grows with the legend
--- PrettyUI's window background, tiled behind the legend row of a node absent from this forest but claimed today, so
--- it stands apart from the red rows still to claim.
 local WINDOW_BACKGROUND_SPRITE = id.Sprite.RS3_MODAL_WINDOW_CONTENT_TILE
-local MISSING_COLOUR = Colours.RED | 0x70 -- translucent red over a node absent from this forest but unclaimed today
+local MISSING_COLOUR = StatusText.RED | 0x70 -- translucent red over a node absent from this forest but unclaimed today
 local KEY_UNSEEN_NAME = MapWidgets.KEY_UNSEEN_TEXT:upper() -- on a legend row, whose names are upper case
 
 -- Returns the bold fonts of these sizes as { id, size }, largest first, ending with the 11pt font (regular, as the
@@ -128,7 +126,8 @@ function NodeLegend.build(map, content)
             row.missing = MapWidgets.create(ui.Rectangle, content)
             row.missing.fill = true
             row.missing.rgba = MISSING_COLOUR
-            row.outline = MapWidgets.addOutline(content, ForestFeatures.colourOf(feature))
+            row.outlineColour = ForestFeatures.colourOf(feature)
+            row.outline = MapWidgets.addOutline(content, row.outlineColour)
             row.hover = MapWidgets.addHover(content, row.cell, cannotRoute)
             map.legendRows[#map.legendRows + 1] = row
         end
@@ -140,7 +139,7 @@ function NodeLegend.build(map, content)
 end
 
 -- Shows each row's counts: dimmed when none is in the forest, covered red when an absent node is still unclaimed,
--- and the hint to walk nearer for a task's NPC not yet seen.
+-- and the hint to walk nearer for the Traitor not yet seen.
 function NodeLegend.showCounts(map)
     local shows = view()
     local isMapped = Forest.bounds ~= nil
@@ -154,17 +153,15 @@ function NodeLegend.showCounts(map)
     for _, row in ipairs(map.legendRows) do
         local feature = row.feature
         local foundCount = Forest.countOf[feature.key] or 0
+        local isUnseen = shows.forestNotes and isMapped and feature.key == "traitor" and Forest.isTraitorUnseen()
         -- canRoute also needs the player inside and no sharing mode, so no outline shows where a click does nothing.
-        row.canRoute = foundCount > 0 and MapView.canChooseRoute()
+        row.canRoute = (foundCount > 0 or isUnseen) and MapView.canChooseRoute()
         local count = feature.kind == "node" and (unusedOf[feature.key] or 0) or foundCount
         if feature.kind == "task" and shows.forestNotes and not Forest.isTaskActive(feature) then count = 0 end
         local isDimmed = isMapped and count == 0
         local isAbsentNode = shows.outlineAbsent and isMapped and feature.kind == "node" and foundCount == 0
         row.isNeeded = isAbsentNode and not Forest.isNodeClaimed(feature.key)
         row.isClaimedAbsent = isAbsentNode and Forest.isNodeClaimed(feature.key)
-        -- An NPC never seen is far off, so the row says to walk nearer. The hint is not dimmed.
-        local isUnseen = shows.forestNotes and isMapped and feature.npcs ~= nil and foundCount == 0
-            and Forest.isTaskActive(feature)
         if row.isDimmed ~= isDimmed then
             row.isDimmed = isDimmed
             MapWidgets.setDimmed(isDimmed, row.icon, row.skill)
@@ -184,6 +181,17 @@ function NodeLegend.showStates(map)
         end
     end
     MapWidgets.showButton(map.mapRouteButton, RouteChoice.isPlanChosen("navigate"))
+end
+
+-- Gives each row's outline its feature's colour, after a colour setting changes.
+function NodeLegend.showColours(map)
+    for _, row in ipairs(map.legendRows) do
+        local colour = ForestFeatures.colourOf(row.feature)
+        if row.outlineColour ~= colour then
+            row.outlineColour = colour
+            row.outline.rgba = colour
+        end
+    end
 end
 
 -- Lays the legend out in box ({ left, top, width, height }), keeping the dividers' heights in box.lines.

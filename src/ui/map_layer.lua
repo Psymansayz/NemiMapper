@@ -54,10 +54,7 @@ function MapLayer.isHidden(map)
     return true
 end
 
--- Places one sprite per zone, showing the zone it was copied from, turned as the grid has it so the picture matches the
--- routes (src/game/forest_grid.lua reads the turns from the zones' standing heights).
--- The pictures show at once and turn as the zones' turns become known (Forest.zoneTurns), before the grid settles.
--- A zone's picture and angle are written only when they change, as this runs on every step of a resize.
+-- Places one sprite per zone, showing the zone it was copied from, turned as the grid has it.
 local function placeZones(map)
     local turns = Forest.zoneTurns
     for index, zone in ipairs(Forest.zones) do
@@ -110,8 +107,6 @@ local function routePoints(map, tiles)
 end
 
 -- Draws a route from its count points (routePoints): its first piece on firstCanvas and the rest on restCanvas.
--- Without restCanvas the rest stays as drawn, and the first piece ends on the edge points it was drawn with, so the
--- two meet without a seam.
 local function drawRoute(map, count, colour, joinsAtStart, firstCanvas, restCanvas)
     if count < 2 then return end
     local pointX, pointY, directionX, directionY, leftX, leftY, rightX, rightY = table.unpack(routeArrays)
@@ -137,23 +132,22 @@ local function drawRoute(map, count, colour, joinsAtStart, firstCanvas, restCanv
     end
 end
 
--- Shows, on the map's bottom left above the duplicates note, which keys the route walks toward the forest's centre to
--- find (keysUnseen: their names), in the route's colour, or hides it with none.
-local function showKeysUnseen(map, keysUnseen, colour)
-    setHidden(map.keysUnseenLine.text, keysUnseen == nil)
-    if keysUnseen ~= nil then
-        StatusText.set(map.keysUnseenLine, "Walk to find " .. table.concat(keysUnseen, " and "), colour)
+-- Shows the message indicating the route is leading to the middle of the forest, not a target.
+local function showUnseen(map, unseen, colour)
+    setHidden(map.unseenLine.text, unseen == nil)
+    if unseen ~= nil then
+        StatusText.set(map.unseenLine, "Walk to find " .. table.concat(unseen, " and "), colour)
     end
 end
 
 -- Draws the chosen route in its target's colour, from the player on, or the final route in white when none is chosen
 -- and it is on.
 -- A canvas can only be cleared whole, so the piece the player walks along has a canvas of its own (routeStart), and
--- the rest is drawn again only when it changes (restPainted): a corner passed, another route, or the map's size.
+-- the rest is drawn again only when it changes.
 function MapLayer.paintRoutes(map)
     if MapLayer.isHidden(map) then return end
     local drawn = RouteChoice.drawn
-    showKeysUnseen(map, drawn and drawn.keysUnseen, drawn and drawn.colour)
+    showUnseen(map, drawn and drawn.unseen, drawn and drawn.colour)
     local scale = map.frame.mapSize .. "," .. map.frame.iconScale
     map.routeStart:Clear()
     if drawn ~= nil and view().activeRoute then
@@ -187,7 +181,9 @@ local function isMarkerShown(map, entry, held, unneeded)
     local shows, feature = view(), entry.feature
     -- The route's stops stay by their own setting, except a key just taken, as the route is about to move on.
     if map.stopsShown[entry] and not (feature.kind == "source" and held[feature.key]) then return true end
-    if feature.isPuzzle then return shows.puzzleElements and ForestStops.isPuzzleNeeded(entry, held, unneeded) end
+    if feature.isPuzzle then
+        return shows.puzzleElements and not unneeded[entry] and ForestStops.isPuzzleLeft(entry, held)
+    end
     if feature.kind == "node" then return shows.nodes and (shows.usedNodes or not entry.isUsed) end
     if feature.kind == "task" then return shows.tasks or Forest.isTaskActive(feature) end
     return true
@@ -326,7 +322,7 @@ function MapLayer.layout(map)
     local frame, mapSize = map.frame, map.frame.mapSize
     setBox(map.layer, frame.mapLeft, frame.mapTop, mapSize, mapSize)
     setBox(map.duplicatesText, 8, mapSize - TEXT_HEIGHT - 6, mapSize - 16, TEXT_HEIGHT)
-    setBox(map.keysUnseenLine.text, 8, mapSize - 2 * TEXT_HEIGHT - 6, mapSize - 16, TEXT_HEIGHT)
+    setBox(map.unseenLine.text, 8, mapSize - 2 * TEXT_HEIGHT - 6, mapSize - 16, TEXT_HEIGHT)
     map.zonesShown = nil
 end
 
@@ -360,9 +356,9 @@ function MapLayer.build(map, content)
     map.playerMarker.rgba = PLAYER_COLOUR
     map.duplicatesText = MapWidgets.addText(map.layer, MapWidgets.TEXT_FONT, MapWidgets.TEXT_COLOUR,
         ui.AlignMode.TOPLEFT, "DUPLICATE NODES DO NOT GIVE EXP")
-    map.keysUnseenLine = StatusText.new(MapWidgets.addText(map.layer, MapWidgets.TEXT_FONT, MapWidgets.TEXT_COLOUR,
+    map.unseenLine = StatusText.new(MapWidgets.addText(map.layer, MapWidgets.TEXT_FONT, MapWidgets.TEXT_COLOUR,
         ui.AlignMode.TOPLEFT))
-    setHidden(map.keysUnseenLine.text, true)
+    setHidden(map.unseenLine.text, true)
 end
 
 return MapLayer

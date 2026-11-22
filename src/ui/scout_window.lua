@@ -8,7 +8,6 @@ local Settings = require("src/data/settings")
 local WindowPlace = require("src/ui/window_place")
 local FullForestAlert = require("src/ui/full_forest_alert")
 local StatusText = require("src/ui/status_text")
-local Colours = require("src/ui/colours")
 
 local ScoutWindow = {}
 
@@ -16,20 +15,17 @@ local WIDTH, HEIGHT = 300, 480 -- HEIGHT only places it, as it is then fitted to
 local MINIMUM_HEIGHT = 140 -- the minimum width comes from widthNeeded
 local TEXT_FONT = id.Font.MUSEO_SANS_15PT_REGULAR -- PrettyUI's text font
 local PADDING = 14 -- PrettyUI's padding on each side of the content
--- The unblock button's row: PrettyUI's button height plus the gap below it.
--- The window grows by this while the button is shown, so the other rows keep their room.
+-- The unblock button's row
 local BUTTON_ROW = 30 + 8
 local UNBLOCK_SUBSCRIPTION = "nemi_mapper_scout_unblock"
 -- Marks a node known only from the rotation. It is kept short, as it sets the minimum width.
 local UNSEEN_SUFFIX = " (unseen)"
-local COMPLETE_COLOUR = Colours.GREEN
-local INCOMPLETE_COLOUR = Colours.GOLD
+local COMPLETE_COLOUR = StatusText.GREEN
+local INCOMPLETE_COLOUR = StatusText.GOLD
 local NODE_COLOUR = 0xFFFFFFFF
 local ABSENT_COLOUR = 0xFFFFFF4D -- dimmed like the map's legend (0.3)
-local MISSING_COLOUR = Colours.RED | 0x99 -- dimmed
+local MISSING_COLOUR = StatusText.RED | 0x99 -- dimmed
 local COUNT_FONT = id.Font.MUSEO_SANS_27PT_BOLD
--- A text has only one font, so "monsters left" is two texts on one line: a larger bold number, right-aligned in the
--- width of the highest possible count, then the words.
 local MONSTER_NUMBER_FONT = id.Font.MUSEO_SANS_19PT_BOLD
 local MONSTER_WORDS = "monsters left"
 local MONSTER_GAP = 5 -- pixels between the number and its words
@@ -66,8 +62,6 @@ local function showCounts()
         setText(parts.keysText, "")
         return
     end
-    -- Once the search settles, the rotation reveals nodes missed between those found.
-    -- They are in the forest but unseen, and their kinds count toward the total.
     local kinds, missed, missedKinds = Forest.scoutCounts()
     local missedOf = {}
     for _, feature in ipairs(missed) do missedOf[feature.key] = (missedOf[feature.key] or 0) + 1 end
@@ -90,7 +84,7 @@ local function showCounts()
     -- An NPC key only reaches the client near the player, so a distant one stays unseen until the player walks nearer.
     local unseen = {}
     for _, toolPair in ipairs(Forest.keysUnseen()) do unseen[#unseen + 1] = toolPair.source.name end
-    for _, task in ipairs(Forest.tasksUnseen()) do unseen[#unseen + 1] = task.name end
+    if Forest.isTraitorUnseen() then unseen[#unseen + 1] = ForestFeatures.byKey.traitor.name end
     setText(parts.keysText, #unseen > 0 and ("Walk nearer: " .. table.concat(unseen, ", ")) or "")
 end
 
@@ -113,8 +107,7 @@ local function widthNeeded(PrettyUI, numberWidth, wordsWidth, isBlocking)
     return widest + PADDING * 2 + WindowPlace.EDGE_WIDTH
 end
 
--- Opens the scout window, or brings it to the front if open. While the full-forest alert blocks the game, it has the
--- unblock button.
+-- Opens the scout window, or brings it to the front if open.
 function ScoutWindow.open(PrettyUI, pluginLayer, onOpenMap)
     if isOpen() then return parts.window:Show() end
     local isBlocking = FullForestAlert.isBlocking()
@@ -168,8 +161,6 @@ function ScoutWindow.showMonsters()
     if isOpen() then showMonsters() end
 end
 
--- Destroys the unblock button a frame after its click hid it, as a component can't be destroyed in its own click.
--- The controls below move up and the window shrinks by its row.
 local function removeUnblockButton()
     Event.Draw.Unsubscribe(UNBLOCK_SUBSCRIPTION)
     if not isOpen() or parts.unblockButton == nil then return end

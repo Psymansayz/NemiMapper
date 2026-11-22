@@ -430,6 +430,11 @@ function MapWindow.showHeaderText()
     if isOpen() then showHeaderText() end
 end
 
+-- Called when a colour setting changes: the legend's outlines take it. The route follows by MapWindow.showRoutes.
+function MapWindow.showColours()
+    if isOpen() then NodeLegend.showColours(parts) end
+end
+
 -- Called when a map display setting changes.
 -- The legends, header and buttons may come or go, so the frame is laid out again.
 function MapWindow.showSettings()

@@ -1,8 +1,4 @@
--- The route chosen and where it leads: a feature or an entrance sign clicked on the map or in a legend, or a plan
--- (NAVIGATE or SOLVE). It keeps the route (drawn) for the world's highlights and the map to draw, map open or not.
--- One route is chosen at a time.
--- A search on every step would cost too much, so the route is kept and worked out again only when the forest, the
--- choice or the tools held change or the player strays from it.
+-- The route the player has chosen: to a feature or sign clicked, or by a plan (NAVIGATE or SOLVE).
 
 local ForestFeatures = require("src/data/forest_features")
 local Forest = require("src/game/forest")
@@ -14,24 +10,20 @@ local Settings = require("src/data/settings")
 
 local RouteChoice = {}
 
-local OFF_ROUTE_TILES = 3 -- straying this far from the drawn route recalculates it
+local OFF_ROUTE_TILES = 3 -- how far the player may stray before the route is worked out again
 
--- What is chosen: nil, { plan = "navigate" or "solve" }, or { key = the key of the feature or sign clicked: a node's,
--- a task's, a puzzle's source key or a sign's }.
+-- nil, { plan = "navigate" or "solve" }, or { key } of the feature or sign clicked
 RouteChoice.choice = nil
--- The route, while one is chosen and reachable: { tiles, colour, target, stops (entry -> true), keysUnseen (names),
--- ahead (the tiles still ahead of the player), trimmedX, trimmedZ (where the ground route was last cut back) }.
+-- The chosen route, for the map and the highlights to draw.
 RouteChoice.drawn = nil
--- Called after each update of drawn, and with true after each cut back of it, for the highlights and the map to draw
--- it (main.lua).
+-- Called when drawn changes, with true when it was only cut back as the player walked (set by main.lua).
 RouteChoice.onDrawn = nil
 
-local waitsFor = nil -- a feature chosen with work left (unclaimed, active), whose choice drops once that is done
-local mappingWaits = false -- NAVIGATE starts once the forest's search ends, unless a route is chosen before
--- The last plan worked out: { state (its inputs), remembered (SolvePlan's tours from each stop), stop (its next),
--- search and searchFrom (the search from the player it was worked out from) }.
+local waitsFor = nil -- Tracks if we should automatically disable the route when the user interacts with it.
+local mappingWaits = false -- NAVIGATE starts when the search ends
+-- The last plan worked out.
 local plan = nil
-local takenShown = {} -- the keys taken at the last forest change, by source key
+local takenShown = {} -- the keys other players held at the last forest change
 
 function RouteChoice.isChosen()
     return RouteChoice.choice ~= nil
@@ -47,11 +39,9 @@ function RouteChoice.keyChosen()
     return RouteChoice.choice and RouteChoice.choice.key
 end
 
--- Returns the next stop of the named plan.
+-- Returns the named plan's next stop.
 local function plannedStop(name, player, stops, blocked)
-    -- The plan is kept whatever the player's tile, until the player leaves the drawn route or its inputs change.
-    -- The tools held and the doors gone change the stops or the blocked tiles, so they need no place of their own.
-    -- Stops are told apart by found feature, so a key's NPC first seen is a new stop but one that drifts is not.
+    -- stops go by found feature, so an NPC that moves is still the same stop
     local stopsAt, blockedAt = {}, {}
     for _, stop in ipairs(stops) do
         stopsAt[#stopsAt + 1] = tostring(stop.entry) .. stop.kind .. (stop.optional and "?" or "")
@@ -69,26 +59,36 @@ local function plannedStop(name, player, stops, blocked)
     return plan.stop, plan.searchFrom == player and plan.search or nil
 end
 
--- Returns a route's tiles as RouteChoice.drawn, or nil without tiles.
-local function drawnRoute(tiles, colour, target, stops, keysUnseen)
-    return tiles and { tiles = tiles, colour = colour, target = target, stops = stops, keysUnseen = keysUnseen }
+-- Returns a route as RouteChoice.drawn, or nil when it has no tiles.
+local function drawnRoute(tiles, colour, target, stops, unseen)
+    return tiles and { tiles = tiles, colour = colour, target = target, stops = stops, unseen = unseen }
 end
 
--- Returns the chosen route from the player (RouteChoice.drawn).
--- A plan keeps the last route's target (keep) while it is still a stop, so only finishing it, leaving the route or
--- choosing again switch targets.
+-- Returns the colour of the route to stop, read each time as the colour settings may change.
+local function colourOf(stop)
+    local feature = stop.entry.feature
+    return feature ~= nil and ForestFeatures.colourOf(feature) or stop.colour
+end
+
+-- Returns the chosen route from player, a plan keeping to its last target (keep) while that is still a stop.
 local function chosenRoute(player, keep)
     local held, blocked = ToolsHeld.held, ForestStops.barrierTiles()
-    -- Returns the stops a plan must visit, as entry -> true, with the doors waiting for an unseen key.
+    -- Returns plan's stops, including the doors whose keys are unseen.
     local function stopsOf(plan)
         local entries = {}
         for _, stop in ipairs(plan.stops) do entries[stop.entry] = true end
         for _, door in ipairs(plan.unseenKeyDoors) do entries[door.entry] = true end
         return entries
     end
-    -- Returns the route to the next stop of the named plan (ForestStops.stopsToward). With no stop to reach, it goes to
-    -- a key another player has, or toward the forest's centre to find the keys not yet seen.
-    local function routeByPlan(name, plan)
+    -- Returns a route toward the forest's centre to find the features in unseen.
+    local function routeToFind(unseen)
+        local names = {}
+        for _, feature in ipairs(unseen) do names[#names + 1] = feature.name end
+        return drawnRoute(Routes.routeTowardCentre(Forest.grid, player, blocked), ForestFeatures.colourOf(unseen[1]),
+            nil, {}, names)
+    end
+    -- Returns the route to the named plan's next stop, or failing that to a taken key or toward what is unseen.
+    local function routeByPlan(name, plan, findTraitor)
         local stops = plan.stops
         local stop, playerSearch = ForestStops.keptStop(stops, keep), nil
         if stop == nil then
@@ -99,18 +99,19 @@ local function chosenRoute(player, keep)
                 if plan.takenKeys[takenStop.entry.feature.key] then
                     local route = Routes.routeTo(Forest.grid, player, { takenStop }, blocked)
                     if route ~= nil then
-                        return drawnRoute(route, takenStop.colour, takenStop.entry, { [takenStop.entry] = true })
+                        return drawnRoute(route, colourOf(takenStop), takenStop.entry, { [takenStop.entry] = true })
                     end
                 end
             end
-            local doors = plan.unseenKeyDoors
-            if #doors == 0 then return nil end
-            local keysUnseen = {}
-            for _, door in ipairs(doors) do keysUnseen[#keysUnseen + 1] = door.entry.feature.pair.source.name end
-            return drawnRoute(Routes.routeTowardCentre(Forest.grid, player, blocked), doors[1].colour, nil,
-                stopsOf(plan), keysUnseen)
+            local unseen = {}
+            for _, door in ipairs(plan.unseenKeyDoors) do unseen[#unseen + 1] = door.entry.feature.pair.source end
+            if findTraitor and Forest.isTraitorUnseen() then unseen[#unseen + 1] = ForestFeatures.byKey.traitor end
+            if #unseen == 0 then return nil end
+            local drawn = routeToFind(unseen)
+            if drawn ~= nil then drawn.stops = stopsOf(plan) end
+            return drawn
         end
-        -- A kept plan's stop has the tiles its NPC was found on, but the route goes to where the NPC is now.
+        -- an NPC may have moved since the plan was made
         local target = stop.entry.isNpc and ForestStops.stopOf(stop.entry) or stop
         local route
         if playerSearch ~= nil then
@@ -120,14 +121,13 @@ local function chosenRoute(player, keep)
         end
         local entries = stopsOf(plan)
         entries[stop.entry] = true
-        return drawnRoute(route, stop.colour, stop.entry, entries)
+        return drawnRoute(route, colourOf(stop), stop.entry, entries)
     end
 
-    -- Returns the route to the nearest of targets (stops) past no barrier, or else the named plan's toward the one
-    -- nearest with the barriers open.
+    -- Returns the route to the nearest of targets, opening barriers by the named plan only when it must.
     local function routeOrPlan(targets, name)
         local route, reached = Routes.routeTo(Forest.grid, player, targets, blocked)
-        if route ~= nil then return drawnRoute(route, reached.colour, reached.entry, { [reached.entry] = true }) end
+        if route ~= nil then return drawnRoute(route, colourOf(reached), reached.entry, { [reached.entry] = true }) end
         local openRoute, openReached = Routes.routeTo(Forest.grid, player, targets)
         if openRoute == nil then return nil end
         return routeByPlan(name, ForestStops.stopsToward({ openReached }, player, held))
@@ -135,14 +135,14 @@ local function chosenRoute(player, keep)
     local function routeToThing(kind, key)
         return routeOrPlan(ForestStops.stopsOfKind(kind, key), "to " .. key)
     end
-    if RouteChoice.isPlanChosen("navigate") then return routeByPlan("nodes", ForestStops.mappingPlan(held)) end
+    if RouteChoice.isPlanChosen("navigate") then return routeByPlan("nodes", ForestStops.mappingPlan(held), true) end
     if RouteChoice.isPlanChosen("solve") then
         return routeByPlan("puzzles", { stops = ForestStops.solveStops(held),
             unseenKeyDoors = ForestStops.unseenKeyDoors(held), takenKeys = Forest.keysTaken })
     end
     for _, sign in ipairs(ForestFeatures.entranceSigns) do
         if sign.key == RouteChoice.keyChosen() then
-            -- the opening's mouth stands as the route's target
+            -- the route ends at the opening's mouth
             local opening = ForestStops.openingOn(sign.side)
             if opening == nil then return nil end
             local mouth = { x = opening.x, z = opening.z, tiles = { opening }, kind = "key", colour = sign.colour,
@@ -152,41 +152,35 @@ local function chosenRoute(player, keep)
     end
     local rowFeature = ForestFeatures.byKey[RouteChoice.keyChosen()]
     if rowFeature == nil then return nil end
+    if rowFeature.key == "traitor" and Forest.isTraitorUnseen() then return routeToFind({ rowFeature }) end
     if not rowFeature.isPuzzle then return routeToThing(rowFeature.kind, rowFeature.key) end
     local toolPair = rowFeature.pair
     if Forest.doorsGone[toolPair.barrier.key] then return nil end
     local target = held[toolPair.source.key] and toolPair.barrier or toolPair.source
     local drawn
     if target == toolPair.source and (Forest.countOf[target.key] or 0) == 0 then
-        -- a key not found yet is looked for toward the forest's centre
-        drawn = drawnRoute(Routes.routeTowardCentre(Forest.grid, player, blocked), ForestFeatures.colourOf(target),
-            nil, {}, { target.name })
+        drawn = routeToFind({ target })
     else
         drawn = routeToThing(target.kind, target.key)
     end
     if drawn == nil then return nil end
-    -- A puzzle chosen is its key and its door, whichever the route leads to now, so both are its stops.
+    -- a chosen puzzle's key and door are both its stops
     for _, entry in ipairs(Forest.found) do
         if entry.feature == toolPair.source or entry.feature == toolPair.barrier then drawn.stops[entry] = true end
     end
     return drawn
 end
 
--- Returns whether the plan chosen has anything left, which is unclaimed nodes for NAVIGATE or unfinished puzzles for
--- SOLVE. When not, its choice drops.
+-- Returns whether the chosen plan has work left; a plan with none is dropped.
 local function planHasWork()
     if RouteChoice.isPlanChosen("navigate") then
-        -- Keys and barriers the routes to the nodes do not need are not work.
-        return #ForestStops.mappingPlan(ToolsHeld.held).stops > 0
+        return #ForestStops.mappingPlan(ToolsHeld.held).stops > 0 or Forest.isTraitorUnseen()
     end
-    -- A barrier gone is gone for good, so a found one still stands.
     return Forest.barriersLeft()
 end
 
--- Works out the chosen route again. With afresh, a plan may switch target; otherwise it keeps its target while that is
--- a stop.
+-- Works out the chosen route again with new information.
 function RouteChoice.update(afresh)
-    -- The grid is missing on the tick the player enters, until the forest's first publish.
     local choice = RouteChoice.choice
     if choice ~= nil and choice.plan ~= nil and Forest.grid ~= nil and Forest.playerTile ~= nil
         and not planHasWork() then
@@ -203,7 +197,7 @@ function RouteChoice.update(afresh)
     RouteChoice.onDrawn(false)
 end
 
--- Chooses a route (RouteChoice.choice), replacing the one chosen, or drops it with nil.
+-- Makes choice the chosen route, or drops the route with nil.
 local function choose(choice)
     RouteChoice.choice, mappingWaits = choice, false
     local feature = choice and ForestFeatures.byKey[choice.key]
@@ -211,28 +205,26 @@ local function choose(choice)
     RouteChoice.update(true)
 end
 
--- Drops the route chosen.
 function RouteChoice.clear()
     choose(nil)
 end
 
--- Chooses a feature's or sign's route, or drops it when it is the one chosen.
+-- Chooses the route to the feature or sign with key, or drops it if already chosen.
 function RouteChoice.toggle(key)
     choose(RouteChoice.keyChosen() ~= key and { key = key } or nil)
 end
 
--- Chooses a plan ("navigate" or "solve"), or drops it when it is the one chosen.
+-- Chooses plan ("navigate" or "solve"), or drops it if already chosen.
 function RouteChoice.togglePlan(plan)
     choose(not RouteChoice.isPlanChosen(plan) and { plan = plan } or nil)
 end
 
--- Starts NAVIGATE's plan once the forest's search ends, on entering it, unless a route is chosen or dropped before.
--- A shared map shows only the final route, so it does not start there.
+-- Starts NAVIGATE once the forest's search ends
 function RouteChoice.startMappingAfterSearch()
     mappingWaits = true
 end
 
--- Returns where route passes nearest to tile, and the position of the next corner after it.
+-- Returns the route's tile nearest to <tile>
 local function nearestOnRoute(route, tile)
     local bestDistance, bestX, bestZ, bestNext = nil, nil, nil, nil
     for position = 1, #route do
@@ -248,41 +240,38 @@ local function nearestOnRoute(route, tile)
             end
         end
     end
-    -- The last tile is found as the last piece's end, but it is the route's end.
+    -- nothing comes after the last tile
     local last = route[#route]
     if bestX == last.x and bestZ == last.z then bestNext = #route + 1 end
     return bestDistance, { x = bestX, z = bestZ }, bestNext
 end
 
--- Called when the player steps with the tools held unchanged: on the route, what is left of it runs from the tile
--- nearest the player; off it, the route is worked out again.
--- A choice with no route waits for a forest change: only a key not found yet leaves a target out of reach.
+-- Called on each step: trims the route to what lies ahead, or works it out again once the player strays.
 function RouteChoice.showPlayer()
     local drawn = RouteChoice.drawn
+    -- a choice with no route waits for the forest to change
     if drawn == nil then return end
     local distance, routeTile, nextCorner = nearestOnRoute(drawn.tiles, Forest.playerTile)
     if distance > OFF_ROUTE_TILES then
-        -- The plan's next stop is worked out again from here; its tours from each stop stay.
+        -- only the plan's next stop is worked out again
         if plan ~= nil then plan.searchFrom = nil end
         return RouteChoice.update(true)
     end
     if nextCorner > #drawn.tiles then return end
     drawn.ahead = { routeTile }
     for position = nextCorner, #drawn.tiles do drawn.ahead[#drawn.ahead + 1] = drawn.tiles[position] end
-    -- The ground route is cut back at each tile walked along it (highlights.lua).
     if drawn.trimmedX ~= routeTile.x or drawn.trimmedZ ~= routeTile.z then
         drawn.trimmedX, drawn.trimmedZ = routeTile.x, routeTile.z
         RouteChoice.onDrawn(true)
     end
 end
 
--- Called when the tools held change: the route follows them, and a plan may switch target.
+-- updates the plan when held tools change.
 function RouteChoice.showHeld()
     if RouteChoice.isChosen() then RouteChoice.update(true) end
 end
 
--- Called when the forest changes. A key freed (the player who had it left the forest) may now be on the shortest
--- way, and so may the tools held (heldChanged), so a plan may switch target instead of keeping it.
+-- updates the plan when new information about the forest is found.
 function RouteChoice.showForest(heldChanged)
     local afresh = heldChanged
     for sourceKey in pairs(takenShown) do
@@ -297,7 +286,6 @@ function RouteChoice.showForest(heldChanged)
     end
 end
 
--- Called when a found NPC (entry) moves: a route leading to it follows it.
 function RouteChoice.showNpcMoved(entry)
     if RouteChoice.drawn ~= nil and RouteChoice.drawn.target == entry then RouteChoice.update() end
 end

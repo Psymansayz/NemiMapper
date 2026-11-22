@@ -4,14 +4,13 @@
 local Forest = require("src/game/forest")
 local ForestFeatures = require("src/data/forest_features")
 local StatusText = require("src/ui/status_text")
-local Colours = require("src/ui/colours")
 
 local RibbonPage = {}
 
 local SUBSCRIPTION = "nemi_mapper_daily"
 local COLUMN_GAP = 8 -- PrettyUI's gap before an inline text
-local DAILY_COMPLETE_COLOUR, DAILY_INCOMPLETE_COLOUR = Colours.GREEN, Colours.GOLD
-local UNCLAIMED_COLOUR = Colours.RED | 0xFF
+local DAILY_COMPLETE_COLOUR, DAILY_INCOMPLETE_COLOUR = StatusText.GREEN, StatusText.GOLD
+local UNCLAIMED_COLOUR = StatusText.RED | 0xFF
 local DAILY_LINE_HEIGHT = 22
 -- The hub's page is narrow, so the page keeps PrettyUI's padding small and indents nothing.
 local PAGE_LAYOUT = { paddingLeft = 4, paddingRight = 4, startY = 6 }

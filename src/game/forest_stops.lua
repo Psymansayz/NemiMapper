@@ -4,14 +4,16 @@
 -- to the nodes needs.
 
 -- Terms used throughout the plugin for getting the player somewhere:
---   stop    one place a plan must or may visit: a node, a task's target, a key or a door
---   target  what one route ends at: a stop, a feature clicked on the map or in a legend, or an opening
---   tour    one order of visiting all of a plan's stops; the planner compares tours by the tiles walked
---   plan    the choice of the next stop, from the best tour. Only NAVIGATE and SOLVE have one.
---   route   the tiles walked to one target, drawn on the map and the ground: the chosen route (a click or a
---           plan's next stop) or the final route (from the entrance past every node to the exit)
---   leg     the walk between two stops within a tour, used only for its distance
--- So a plan picks the next stop by comparing tours, and the route is the tiles that lead to its target.
+--   stop    a place a plan visits: a node, a task's target, a key or a door. Some are optional, and copies of one node
+--           share a group, of which one is visited.
+--   target  what a route ends at: a stop, a feature clicked on the map or in a legend, or an opening. A route walking
+--           toward the forest's centre to find unseen keys has none.
+--   tour    an order of visiting a plan's stops: every required one, one copy of each node, and optional ones only if
+--           they save tiles. The planner compares tours by the tiles walked.
+--   plan    the choice of the next stop, from the best tour: NAVIGATE's, SOLVE's, or a clicked target's when doors are
+--           in the way.
+--   route   the tiles walked to a target, drawn on the map and the ground.
+-- So a plan picks the next stop by comparing tours, and the route is the tiles that lead to it.
 
 local ForestFeatures = require("src/data/forest_features")
 local Forest = require("src/game/forest")
@@ -19,8 +21,7 @@ local SolvePlan = require("src/game/solve_plan")
 
 local ForestStops = {}
 
--- Returns a found feature as tiles: the x and z of its south-west corner, and every tile it covers, as it can be
--- reached from beside any of them.
+-- Returns a found feature as tiles: the x and z of its south-west corner, and every tile it covers
 local function tilesOfEntry(entry)
     local left, bottom = Forest.southWestOf(entry)
     local footprint = {}
@@ -30,18 +31,18 @@ local function tilesOfEntry(entry)
     return { x = left, z = bottom, tiles = footprint }
 end
 
--- Returns whether a key's or door's puzzle is unsolved: its door still stands.
+-- Returns whether a key's or door's door is still closed.
 local function isUnsolved(feature)
     return not Forest.doorsGone[feature.pair.barrier.key]
 end
 
--- Returns whether a found feature is a mapping stop: a node not claimed today, or the active task's target.
+-- Returns whether a found feature is a navigation stop: a node not claimed today and the active task's target.
 local function isMapStop(entry)
     local feature = entry.feature
     return (feature.kind == "node" and not entry.isUsed) or (feature.kind == "task" and Forest.isTaskActive(feature))
 end
 
--- Returns the found features for which isStop(entry) is true, as stops.
+-- Returns the stops in the current forest matching a feature filter, isStop
 function ForestStops.stopsWhere(isStop)
     local stops = {}
     for _, entry in ipairs(Forest.found) do
@@ -50,7 +51,7 @@ function ForestStops.stopsWhere(isStop)
     return stops
 end
 
--- Returns the found features of a kind (and key) as stops.
+-- Returns the stops in the current forest of a certain kind.
 function ForestStops.stopsOfKind(kind, key)
     return ForestStops.stopsWhere(function(entry)
         return entry.feature.kind == kind and (key == nil or entry.feature.key == key)
@@ -68,7 +69,7 @@ function ForestStops.openingOn(side)
     end
 end
 
--- Returns the barriers' tiles, which routes to a tool or barrier do not cross.
+-- Returns all tiles currently blocked by barriers
 function ForestStops.barrierTiles()
     local blocked = {}
     for _, barrier in ipairs(ForestStops.stopsOfKind("barrier")) do
@@ -79,28 +80,22 @@ function ForestStops.barrierTiles()
     return blocked
 end
 
--- Returns whether a key or door is still needed.
+-- Returns whether a key or door still needed.
 function ForestStops.isPuzzleLeft(entry, held)
     local feature = entry.feature
     return isUnsolved(feature) and not (feature.kind == "source" and held[feature.key])
 end
 
--- Returns whether a key or door is still needed and not among unneeded (entry -> true).
-function ForestStops.isPuzzleNeeded(entry, held, unneeded)
-    return not unneeded[entry] and ForestStops.isPuzzleLeft(entry, held)
-end
-
--- Returns a found feature as a plan stop, with its tiles and the colour of the route to it. A barrier is a door
--- stop, anything else a key stop (visited without a key first).
+-- Returns a found feature as a plan stop with its tiles. A barrier is a door stop, anything else a key stop
 function ForestStops.stopOf(entry)
     local stop = tilesOfEntry(entry)
     stop.kind = entry.feature.kind == "barrier" and "door" or "key"
-    stop.colour, stop.entry = ForestFeatures.colourOf(entry.feature), entry
+    stop.entry = entry
     if entry.feature.kind == "node" then stop.group = entry.feature.key end
     return stop
 end
 
--- Returns the stop in stops at entry, if it waits for no key first.
+-- Returns the stop in <stops> at <entry>, if it waits for no key first.
 function ForestStops.keptStop(stops, entry)
     for _, stop in ipairs(stops) do
         if stop.entry == entry and stop.needs == nil then return stop end
@@ -114,10 +109,9 @@ function ForestStops.isWorkLeft(feature)
 end
 
 -- Returns the puzzles' stops.
--- Each unfinished puzzle has its key as a stop while the player lacks it, unless another player has it.
--- A barrier is a stop if its key is a stop or is held.
+-- Each unopened door's key is a stop while the player lacks it and it's location is known.
+-- A door is a stop if its key is a stop or is held.
 function ForestStops.solveStops(held)
-    -- The first found of each puzzle feature, in one pass.
     local firstOf = {}
     for _, entry in ipairs(Forest.found) do
         if entry.feature.isPuzzle and firstOf[entry.feature] == nil then firstOf[entry.feature] = entry end
@@ -139,8 +133,7 @@ function ForestStops.solveStops(held)
     return stops
 end
 
--- Returns the stops of the doors whose key is neither seen nor held, which SOLVE walks toward the forest's centre to
--- find when nothing else is left to reach.
+-- returns the doors whose key's location is unkown.
 function ForestStops.unseenKeyDoors(held)
     local doors = {}
     for _, toolPair in ipairs(Forest.keysUnseen()) do
@@ -180,9 +173,11 @@ function ForestStops.tilesNotInPlan(stops, blocked)
     return left
 end
 
--- Returns a plan toward the targets: { stops, unseenKeyDoors, takenKeys, puzzleStops }. stops are the targets, which
--- must be visited, plus the puzzle stops on the way; unseenKeyDoors the doors on the way whose key is not seen yet;
--- takenKeys the source keys on the way that another player has (key -> true); puzzleStops every puzzle stop.
+-- Returns a plan toward the targets: { stops, unseenKeyDoors, takenKeys, puzzleStops }. 
+-- stops are the targets, which must be visited.
+-- unseenKeyDoors are the doors on the way whose key is not seen yet;
+-- takenKeys the source keys on the way that another player has (key -> true);
+-- puzzleStops is every key/door stop.
 function ForestStops.stopsToward(targets, player, held)
     local stops, mustVisit, isStop, isTarget = {}, {}, {}, {}
     local puzzleStops = ForestStops.solveStops(held)
@@ -217,8 +212,7 @@ function ForestStops.stopsToward(targets, player, held)
     return plan
 end
 
--- Returns what NAVIGATE's stops depend on, as a string: the unclaimed nodes, active tasks and unfinished puzzles
--- found, the tools in held and the keys another player has.
+-- Returns what NAVIGATE's stops depend on, as a string for easy equality comparison.
 local function planSignature(held)
     local parts = {}
     for key in pairs(held) do parts[#parts + 1] = key end
@@ -235,11 +229,8 @@ end
 local NONE = {}
 local NO_PLAN = { stops = NONE, unseenKeyDoors = NONE, takenKeys = NONE, unneeded = NONE }
 
--- Returns NAVIGATE's plan (stopsToward) toward every found node not claimed today and the active task's target, with
--- unneeded: the puzzle entries it does not need.
--- The player is never past a standing barrier, and the forest's few loops never lead round one, so the barriers on
--- the way to each stop are the same from any tile the player can reach: the plan is worked out again only when the
--- signature changes.
+-- Returns NAVIGATE's plan
+-- the plan is worked out again only when the signature changes.
 local kept = NO_PLAN
 function ForestStops.mappingPlan(held)
     local player = Forest.playerTile

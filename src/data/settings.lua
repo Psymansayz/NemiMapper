@@ -1,5 +1,5 @@
 -- The settings, saved in PersistentDB (shared by every client in this install). Switches are booleans, numbers
--- are integers within their range and texts are strings.
+-- are integers within their range, texts are strings and colours are 0xRRGGBBAA integers.
 -- Window places and sizes are integers, or nil until first moved.
 
 local Settings = {}
@@ -63,16 +63,23 @@ local SWITCHES = {
     { "blockOnFullForest", false },   -- block game clicks on a 9/9 forest for 5 s or until dismissed
     { "alertOnNeededNodes", false },  -- the alert comes once every node still unclaimed today is in the forest
 }
--- Each saved text's default. headerText is a text field on the settings page;
--- a keybind is saved as its keys' names (GameKey constants), space-separated, "" when unbound.
+-- Each saved text field's default.
 local STRINGS = {
     headerText = "FC: FC Nemi", -- the map header's right-hand text, as on the map pack's maps
     keybindOpenMap = "",
 }
--- Each is a slider on the settings page, under a switch like a switch can be.
+
 Settings.numbers = {
-    -- 0 is opaque, 100 invisible. At 44 the box sides have the fill the boxes were designed around (0x8F).
+    -- 0 is opaque, 100 invisible.
     highlightTransparency = { default = 44, min = 0, max = 100, under = "highlightInWorld" },
+}
+
+local COLOURS = {
+    prayerColour = 0x2F6FD6FF,
+    farmingColour = 0xB4F03CFF,
+    miningColour = 0x7A4A24FF,
+    dungeoneeringColour = 0x1FA392FF,
+    tasksColour = 0xF2E05AFF, -- yellow
 }
 
 -- Each setting's parent and offWhen setting, by key.
@@ -98,7 +105,7 @@ function Settings.effective(key)
     return Settings[key] and Settings.isEnabled(key)
 end
 
--- Each window's top-left corner and size, as WindowPlace names them.
+-- Each window's top-left corner and size
 local PLACES = {}
 for _, window in ipairs({ "map", "scout", "settings", "nodeLegend", "puzzleLegend" }) do
     for _, part in ipairs({ "X", "Y", "Width", "Height" }) do PLACES[#PLACES + 1] = window .. part end
@@ -109,9 +116,9 @@ function Settings.reset()
     for _, switch in ipairs(SWITCHES) do Settings[switch[1]] = switch[2] end
     for key, number in pairs(Settings.numbers) do Settings[key] = number.default end
     for key, default in pairs(STRINGS) do Settings[key] = default end
+    for key, default in pairs(COLOURS) do Settings[key] = default end
 end
 
--- Returns settingKey's saved integer, or nil if unsaved or negative (-1 marks an unset place).
 local function savedInteger(settingKey)
     local savedValue = PersistentDB:GetInt(settingKey)
     return savedValue ~= nil and savedValue >= 0 and savedValue or nil
@@ -136,13 +143,18 @@ function Settings.load()
     for key, default in pairs(STRINGS) do
         Settings[key] = Settings.withoutTags(PersistentDB:GetString(key) or default)
     end
+    for key, default in pairs(COLOURS) do
+        local saved = savedInteger(key)
+        Settings[key] = saved == nil and default or (saved & 0xFFFFFF) << 8 | 0xFF
+    end
 end
 
--- Called on shutdown and on leaving the game (main.lua).
+-- Called only on shutdown/leaving the game
 function Settings.save()
     for _, switch in ipairs(SWITCHES) do PersistentDB:SetInt(switch[1], Settings[switch[1]] and 1 or 0) end
     for key in pairs(Settings.numbers) do PersistentDB:SetInt(key, Settings[key]) end
     for key in pairs(STRINGS) do PersistentDB:SetString(key, Settings[key]) end
+    for key in pairs(COLOURS) do PersistentDB:SetInt(key, Settings[key] >> 8) end
     for _, key in ipairs(PLACES) do PersistentDB:SetInt(key, Settings[key] or -1) end
 end
 

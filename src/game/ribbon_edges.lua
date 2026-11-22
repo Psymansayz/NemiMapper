@@ -4,13 +4,9 @@
 local MITRE_LEAST = 0.001 -- when the normals sum to less than this, the route doubled back and gets no mitre
 local MITRE_LONGEST = 3 -- in half widths; a sharp turn's mitre grows without limit, so it is capped here
 
--- The client's require only keeps a module that returns a table, so this is a module of one function.
 local RibbonEdges = {}
 
--- Fills leftX, leftY, rightX and rightY with the edge points half a width (half) to each side of the count points
--- pointX, pointY, and directionX, directionY with each step's direction. Filling given arrays lets the map draw
--- without making tables. The ends extend half a width outward, but a start joining another route (joinsAtStart)
--- does not.
+-- Makes ribbon segments meet flush at corners and diagonals.
 function RibbonEdges.fill(pointX, pointY, count, half, joinsAtStart, directionX, directionY, leftX, leftY, rightX,
     rightY)
     for position = 1, count - 1 do

@@ -135,9 +135,7 @@ function LegendWindows.show(map)
     end
 end
 
--- Fits the windows to their legends as the frame is laid out. A node legend window's height follows its rows: when
--- rows come or go (nodes claimed, another setting), each row keeps its height, so the window shrinks or grows by the
--- rows'. A puzzle legend window's least size follows the simplified legends setting, and the window grows to it.
+-- Fits the windows to their legends as the frame is laid out.
 function LegendWindows.fit(map)
     local shows = view()
     local window = map.nodeHost.window
@@ -173,9 +171,6 @@ function LegendWindows.fit(map)
 end
 
 -- Shrinks or grows the windows with their legends when simplified legends are turned on or off.
--- The node legend's fits its legend's width at the window's height, leaving no room beside a simplified legend's
--- pictures. The puzzle legend's changes by what the legend gains or loses (SOLVE's column and the line of names) from
--- its size before (puzzleSize).
 function LegendWindows.fitSimplified(map, puzzleSize)
     local simple = view().simpleLegends
     local window = map.nodeHost.window

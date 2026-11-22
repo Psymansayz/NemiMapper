@@ -5,11 +5,10 @@ local Settings = require("src/data/settings")
 local Keybinds = require("src/ui/keybinds")
 local WindowPlace = require("src/ui/window_place")
 local StatusText = require("src/ui/status_text")
-local Colours = require("src/ui/colours")
 
 local SettingsPage = {}
 
-local SECTION_COLOUR = Colours.GOLD
+local SECTION_COLOUR = StatusText.GOLD
 local SECTION_FONT = id.Font.CINZEL_18PT_BOLD
 local SECTION_HEIGHT = 30 -- room for the 18pt heading
 local PARAGRAPH_GAP = 18 -- a blank line between the settings' how-to paragraphs
@@ -98,6 +97,12 @@ local settingRows = {
     { key = "alertOnNeededNodes", name = "Alert on every node you still need instead", onChange = "scout",
         info = "Trigger alerts when the forest has every node you have not claimed today, rather than only when "
             .. "all 9 are present." },
+    { section = "Node colors" },
+    { key = "prayerColour", name = "Prayer", colour = true, onChange = "colours" },
+    { key = "farmingColour", name = "Farming", colour = true, onChange = "colours" },
+    { key = "miningColour", name = "Mining", colour = true, onChange = "colours" },
+    { key = "dungeoneeringColour", name = "Dungeoneering", colour = true, onChange = "colours" },
+    { key = "tasksColour", name = "Trinks' tasks", colour = true, onChange = "colours" },
     { section = "Keybinds" },
     { key = "keybindOpenMap", name = "Open or close the map", keybind = true },
 }
@@ -244,9 +249,11 @@ local function addTextRow(view, row)
     keepControl(view, row, field, function() field:SetText(Settings[row.key], false) end)
 end
 
-local KEYBIND_LABEL_WIDTH, KEYBIND_FIELD_WIDTH = 220, 160
+-- A keybind or colour row has its name in a column of this width, its control after it on the same line.
+local LABEL_WIDTH = 220
+local KEYBIND_FIELD_WIDTH = 160
 local function addKeybindRow(view, row)
-    view:AddText({ text = row.name, width = KEYBIND_LABEL_WIDTH, marginBottom = ROW_GAP })
+    view:AddText({ text = row.name, width = LABEL_WIDTH, marginBottom = ROW_GAP })
     if row.info ~= nil then addInfoIcon(view, row.info) end
     local field
     field = view:AddKeybindField({
@@ -257,11 +264,25 @@ local function addKeybindRow(view, row)
     keepControl(view, row, field, function() field:SetValue(Keybinds.openMapKeys, false) end)
 end
 
--- Adds a setting's row: a checkbox, or the row's slider, text or keybind control.
+-- A colour row's swatch opens PrettyUI's colour picker, and its Accept sets the colour.
+local COLOUR_SWATCH_SIZE = 24 -- PrettyUI's default
+local function addColourRow(view, row)
+    view:AddText({ text = row.name, width = LABEL_WIDTH, marginBottom = ROW_GAP })
+    local picker
+    picker = view:AddColourPicker({
+        value = Settings[row.key], inline = true, size = COLOUR_SWATCH_SIZE, marginBottom = ROW_GAP,
+        windowTitle = row.name .. " colour",
+        onChange = function(_, colour) changeSetting(row, colour, picker) end,
+    })
+    keepControl(view, row, picker, function() picker:SetValue(Settings[row.key], false) end)
+end
+
+-- Adds a setting's row: a checkbox, or the row's slider, text, keybind or colour control.
 local function addSetting(view, row)
     if row.slider then return addSlider(view, row) end
     if row.text then return addTextRow(view, row) end
     if row.keybind then return addKeybindRow(view, row) end
+    if row.colour then return addColourRow(view, row) end
     local choices = { { text = row.name, value = row.key, selected = showsTicked(row) } }
     local checkbox
     checkbox = view:AddCheckboxButton(choices, {
@@ -287,8 +308,8 @@ local function resetSettings()
     end
     showEnabledStates()
     SettingsPage.onChange.sharing()
-    SettingsPage.onChange.routes()
-    SettingsPage.onChange.highlights()
+    -- the colours' change also redraws the route and the highlights
+    SettingsPage.onChange.colours()
 end
 
 local RESTORE_TEXT = "Restore the default settings"
@@ -371,8 +392,10 @@ local function settingsWidthNeeded()
                 width = SLIDER_LEAST_WIDTH
             elseif row.text then
                 width = TEXT_FIELD_WIDTH
+            elseif row.colour then
+                width = LABEL_WIDTH + COLUMN_GAP + COLOUR_SWATCH_SIZE
             else
-                width = row.keybind and KEYBIND_LABEL_WIDTH + COLUMN_GAP + KEYBIND_FIELD_WIDTH
+                width = row.keybind and LABEL_WIDTH + COLUMN_GAP + KEYBIND_FIELD_WIDTH
                     or prettyui.CheckboxButton.getSize({ { text = row.name, value = row.key } })
                 if row.info ~= nil then width = width + COLUMN_GAP + INFO_ICON_SIZE end
             end

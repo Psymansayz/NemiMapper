@@ -49,8 +49,7 @@ dependency, see `plugin.json`). The `main` branch is the release; `dev` has the 
 | | `scout_window.lua` | The scout window: node kinds found, counts, monsters left. |
 | | `full_forest_alert.lua` | The green flash and the click block on a 9/9 forest. |
 | | `sharing_button.lua` | The map title bar's sharing-mode button. |
-| | `colours.lua` | The green, gold and red the windows and the hub page share. |
-| | `status_text.lua` | A text that writes its content and colour only when they change. |
+| | `status_text.lua` | A text that writes its content and colour only when they change, and the shared status colours. |
 | | `window_place.lua` | Saves and restores a window's place and size. |
 | `resources` | `*.png` | Icons for features and signs, and `zone_<x>_<z>.png` pictures of each template zone for the map. |
 
@@ -115,9 +114,10 @@ clears the highlights and saves the settings.
     and the pair's `colour`.
   - `dailyTasks`: Trinks' ten daily tasks, each with its quest struct (which the game's enum maps to the current
     task's value) and the variables or items its progress is counted in, for the hub page. `trinksTasks` are the two
-    with a target in the forest (Pahtli plant, Traitor), which also say how the target counts as done (`doneVar` or
-    `doneItem`).
-  - `skillColours`, `colourOf(feature)`, `monstersAtMost`, `tasksADay`.
+    with a target in the forest (Pahtli plant, Traitor), which have a `key` and what the forest scan finds them by. A target is needed until its task's
+    parts are done.
+  - `colourOf(feature)` (a node's or task's from its colour setting, a puzzle's from its pair), `monstersAtMost`,
+    `tasksADay`.
   - Each feature's `kind`, `layer`, `isPuzzle` and `pair`, set at load, and `all` and `byKey` listing them.
 - **Used by:** almost everything. `forest.lua` builds its lookups (`featureOfLocID`, `featureOfNpcID`,
   `featureAddedAs`) from the names.
@@ -125,7 +125,8 @@ clears the highlights and saves the settings.
 ### `settings.lua`
 - **Source:** the defaults in the file, then `PersistentDB` (shared by every client in this install).
 - **Holds:** `SWITCHES` (booleans), `Settings.numbers` (the transparency slider), `STRINGS` (the header text and
-  the keybind, saved as `GameKey` names) and `PLACES` (window positions and sizes, -1 when unset). After
+  the keybind, saved as `GameKey` names), `COLOURS` (each skill's node colour and Trinks' tasks', 0xRRGGBBAA, saved
+  as 0xRRGGBB) and `PLACES` (window positions and sizes, -1 when unset). After
   `Settings.load()` every value is a field of `Settings` (`Settings.hideUsedNodes`, `Settings.mapX`, ...).
   A setting may count only while another is on (`Settings.under`, a sub-setting on the page) or off
   (`Settings.offWhen`); `Settings.effective(key)` is a switch as it takes effect, and `Settings.isEnabled(key)`
@@ -207,8 +208,9 @@ announced at a known tile updates its entry in place.
 
 **Claims and tasks.** Each node's claim is a VarBit of one base variable; a `VarTransmit` of that base re-reads the
 claims and republishes. The current Trinks' task is `RAID1_GOEBIE_CURRENT_QUEST`, mapped to each daily task through
-the game's enum and the task's struct; a task's target counts as done by its `doneVar` or by holding its `doneItem`. The task can change only at
-Trinks, outside the forest, so inside it only the `doneVar`s' base variables republish (the Traitor killed). `Forest.itemsHeld()` reads the
+the game's enum and the task's struct; a task's target counts as done once the task's parts are. The task can change only at Trinks, outside the
+forest, so inside it only the base variables of those tasks' parts republish (the Traitor killed), and an inventory
+change republishes when it makes a target done or needed again (the fruit picked). `Forest.itemsHeld()` reads the
 backpack and worn items. Inside the forest the result is kept until an `InventoryUpdated` for one of those
 inventories; outside it is read on each call.
 
@@ -275,7 +277,7 @@ One route is chosen at a time, map open or not: `RouteChoice.choice` is nil, `{ 
 and `clear`. `startMappingAfterSearch` presses NAVIGATE once the search ends, unless a route was chosen or dropped
 before. `update` works the route out (`chosenRoute`): a plan's next stop
 for NAVIGATE or SOLVE, or a route to the thing clicked; a target behind a door becomes a small plan toward it. It
-keeps the result in `RouteChoice.drawn` (`{ tiles, colour, target, stops, keysUnseen, ahead, trimmedX, trimmedZ }`)
+keeps the result in `RouteChoice.drawn` (`{ tiles, colour, target, stops, unseen, ahead, trimmedX, trimmedZ }`)
 and calls `RouteChoice.onDrawn`, which main.lua hands to the highlights and the map. It runs
 again when the forest, the choice or the tools held (`ToolsHeld.held`) change; on each step `showPlayer` cuts the
 route back to the player's nearest point on it (`ahead`, `onDrawn(true)`), and straying more than three tiles works
@@ -346,7 +348,10 @@ when every kind is present (or, by a setting, every kind still unclaimed today: 
   listens to `VarTransmit` while it exists, and to the backpack while the current task counts items.
 - `SettingsLayerReady` builds the settings page (`settings_page.lua`); the same rows also build the settings window.
 - Each row's `onChange` names the kind of change, and `main.lua` maps each kind to what shows it
-  (`MapWindow.showSettings`, `Highlights.refresh`, ...). The route settings only draw the route again.
+  (`MapWindow.showSettings`, `Highlights.refresh`, ...). The route settings only draw the route again. A colour
+  setting recolours the node legend's outlines and the highlights, and works the chosen route out again, as a route
+  takes its colour when worked out.
+- A colour row's swatch is PrettyUI's colour picker (`AddColourPicker`), whose window sets the colour on Accept.
 - The map's sharing button changes its setting on the frame after its click, as the change may rebuild the map and
   the button with it.
 - The one keybind (`keybinds.lua`) opens or closes the map, and `KeyDown` is listened to only while it is bound.
@@ -359,7 +364,6 @@ when every kind is present (or, by a setting, every kind still unclaimed today: 
 | `LocAdded`, `LocRemoved`, `NPCEntityAdded`, `VarTransmit`, `InventoryUpdated` | While a region is watched | The forest's changes. |
 | `Logic` (50/s) | While an NPC is highlighted | `followTracked` moves its box. |
 | `Logic` (50/s) | During the 5 s alert | The flash. |
-| `Draw` (per frame) | While the first ground route builds | 12 tiles a frame. |
 | `Draw` (per frame) | During a map resize drag | Fits the window on release. |
 | `Draw` (per frame) | For one frame after the alert's unblock button is clicked | Removes the button. |
 | `Draw` (per frame) | For one frame after the map's sharing button is clicked | Turns map sharing mode on or off. |

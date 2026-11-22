@@ -104,10 +104,9 @@ local settlingTicksLeft = 0
 -- NPCEntityAdded arrives a tick early, so this signals to check the NPC list on the next server tick.
 local npcsArrived = false
 
--- Nodes whose XP was claimed today: read on entering the forest, whenever the server sends their base variable,
--- and for the ribbon page's count.
+-- Nodes whose XP was claimed today: read on entering the forest and whenever the server sends their base variable
 local claimedNow = {} -- node key -> true
-local taskItemsHeld = {} -- task -> true while its doneItem is held, as last checked
+local tasksActive = {} -- task -> whether its target is needed, as last checked on an inventory change
 -- The player's current Trinks' task and its base variable, which is what the server sends.
 local currentQuest = GameIds.playerVariable("RAID1_GOEBIE_CURRENT_QUEST")
 local currentQuestBaseID = GameIds.baseIDOf(currentQuest)
@@ -135,21 +134,46 @@ for _, task in ipairs(ForestFeatures.dailyTasks) do
     end
 end
 
--- Each forest task's VarBit marking its target's part done, and the item it gives, if any.
-local doneVariableOf, doneItemOf = {}, {}
-local doneBaseIDs = {} -- the done variables' base variables, which are what the server sends
-for _, task in ipairs(ForestFeatures.trinksTasks) do
-    if task.doneVar ~= nil then
-        local variable = GameIds.playerVariable(task.doneVar)
-        doneVariableOf[task] = variable
-        local baseID = GameIds.baseIDOf(variable)
-        if baseID ~= nil then doneBaseIDs[baseID] = true end
+-- The VarBits the game counts a task's parts in, and the items it counts.
+local partVariableOf, partItemOf = {}, {}
+for _, task in ipairs(ForestFeatures.dailyTasks) do
+    for _, part in ipairs(task.parts) do
+        if part.var ~= nil and partVariableOf[part.var] == nil then
+            partVariableOf[part.var] = GameIds.playerVariable(part.var)
+        end
+        if part.item ~= nil and partItemOf[part.item] == nil then
+            partItemOf[part.item] = GameIds.resolve("Obj", part.item)
+        end
     end
-    if task.doneItem ~= nil then doneItemOf[task] = GameIds.resolve("Obj", task.doneItem) end
+end
+
+-- The base variables of the forest tasks' parts, which are what the server sends when a target is done.
+local targetBaseIDs = {}
+for _, task in ipairs(ForestFeatures.trinksTasks) do
+    for _, part in ipairs(task.parts) do
+        local baseID = part.var ~= nil and GameIds.baseIDOf(partVariableOf[part.var])
+        if baseID then targetBaseIDs[baseID] = true end
+    end
+end
+
+local function partCount(part)
+    if part.var ~= nil then
+        local variable = partVariableOf[part.var]
+        return variable ~= nil and variable.value or 0
+    end
+    local itemID = partItemOf[part.item]
+    return itemID ~= nil and Inventory.Find(config.Inv.INV.id):GetTotal(itemID) or 0
+end
+
+local function arePartsDone(task)
+    for _, part in ipairs(task.parts) do
+        if partCount(part) < part.of then return false end
+    end
+    return true
 end
 
 -- Returns the items in the backpack and worn equipment: item id -> true.
--- Inside the forest they are kept until the inventory changes; outside it they are read on each call.
+-- Inside the forest they are cached until the inventory changes;
 local HELD_INVENTORY_IDS = { config.Inv.INV.id, GameIds.resolve("Inv", "WORN") }
 local isHeldInventory = {}
 for _, inventoryID in ipairs(HELD_INVENTORY_IDS) do isHeldInventory[inventoryID] = true end
@@ -167,23 +191,15 @@ function Forest.itemsHeld()
     return items
 end
 
-local function holdsDoneItem(task)
-    local itemID = doneItemOf[task]
-    return itemID ~= nil and Forest.itemsHeld()[itemID] == true
-end
-
 -- Returns the tile of a found feature's south-west corner, from its centre and size.
 function Forest.southWestOf(entry)
     return math.floor(entry.x - entry.width / 2), math.floor(entry.z - entry.length / 2)
 end
 
--- Returns whether the player needs a Trinks' task's target now: on that task, with that part not done yet.
+-- Returns whether the player needs a Trinks' task's target now
 function Forest.isTaskActive(task)
-    if currentQuest == nil or questOf[task] == nil or currentQuest.value ~= questOf[task] or holdsDoneItem(task) then
-        return false
-    end
-    local doneVariable = doneVariableOf[task]
-    return doneVariable == nil or doneVariable.value == 0
+    return currentQuest ~= nil and questOf[task] ~= nil and currentQuest.value == questOf[task]
+        and not arePartsDone(task)
 end
 
 -- Returns the number of Trinks' tasks done today.
@@ -193,19 +209,6 @@ function Forest.tasksDoneToday()
     return tasksDoneVariable ~= nil and tasksDoneVariable.value or 0
 end
 
--- The VarBits the game counts a task's parts in, and the items it counts.
-local partVariableOf, partItemOf = {}, {}
-for _, task in ipairs(ForestFeatures.dailyTasks) do
-    for _, part in ipairs(task.parts) do
-        if part.var ~= nil and partVariableOf[part.var] == nil then
-            partVariableOf[part.var] = GameIds.playerVariable(part.var)
-        end
-        if part.item ~= nil and partItemOf[part.item] == nil then
-            partItemOf[part.item] = GameIds.resolve("Obj", part.item)
-        end
-    end
-end
-
 -- Returns whether the current task counts items carried in the backpack, so a change to it may alter its progress.
 function Forest.taskCountsItems()
     local task = currentQuest and taskOfQuest[currentQuest.value]
@@ -213,7 +216,7 @@ function Forest.taskCountsItems()
     for _, part in ipairs(task.parts) do
         if part.item ~= nil then return true end
     end
-    return doneItemOf[task] ~= nil
+    return false
 end
 
 -- Returns the current Trinks' task: its name, its parts as counted
@@ -225,23 +228,13 @@ function Forest.currentTask()
     if task == nil then return { name = "task " .. quest, parts = {}, done = false } end
     local parts, done = {}, true
     for index, part in ipairs(task.parts) do
-        local count = 0
-        if part.var ~= nil then
-            local variable = partVariableOf[part.var]
-            count = variable ~= nil and variable.value or 0
-        elseif partItemOf[part.item] ~= nil then
-            count = Inventory.Find(config.Inv.INV.id):GetTotal(partItemOf[part.item])
-        end
+        local count = partCount(part)
         parts[index] = { what = part.what, count = count, of = part.of }
         done = done and count >= part.of
     end
-    -- a forest task (the Pahtli plant) has no parts and is done once its item is held
-    local itemID = doneItemOf[task]
-    if itemID ~= nil then done = Inventory.Find(config.Inv.INV.id):GetTotal(itemID) > 0 end
     return { name = task.name, parts = parts, done = done }
 end
 
--- Returns the base variables the server sends for the claims, the current task and the tasks done.
 function Forest.dailyVariableIDs()
     return claimedBaseID, currentQuestBaseID, tasksDoneBaseID
 end
@@ -269,7 +262,7 @@ local function playerListed(holder)
 end
 
 local function onPlayerRemoved()
-    playersRemoved = true
+    playersRemoved = true 
 end
 
 -- Listens for players leaving while a key is taken.
@@ -295,8 +288,7 @@ local function freeKeysOfPlayersGone()
     listenToPlayers()
 end
 
--- Returns whether an NPC tool was found that does not follow the player while its door stands, so the info box or
--- the dialogue box may say that it now follows, or that it follows another player.
+-- returns if a found npc tool is not held nor another player.
 local function npcToolWaiting()
     for _, entry in ipairs(npcsFound) do
         local feature = entry.feature
@@ -308,8 +300,8 @@ local function npcToolWaiting()
     return false
 end
 
--- Reads the info box and the dialogue box, while an NPC tool waits (npcToolWaiting), for a follow message or a
--- refusal as it follows another player.
+-- listens for dialogue boxes and info boxes while needed to detect when npc keys are picked up.
+-- also listens to players leaving the instance if an npc key is held by another player.
 local function readDialogue()
     if not npcToolWaiting() then return end
     local texts = {}
@@ -342,9 +334,11 @@ end
 -- The server's announcement. Every node, key and barrier arrives as a LocAdded event in one burst on the
 -- region's first ticks (0-2, sometimes after the forest is entered), before the client loads any of them. Scans
 -- only see what the client loads, which a low draw distance limits to nearby zones, so an announced feature
--- counts as found from the event alone, with its saved box (src/game/model_bounds.lua); after a reload, when the
--- announcement has passed, scans find the forest instead. A server tick with nothing new completes the announcement
--- and ends the search. Later events at those tiles are changes (a barrier cut, a key taken). Nodes are announced as
+-- counts as found from the event alone, with its saved box (src/game/model_bounds.lua); 
+
+-- after a reload within the forest, scans find the forest as the events on entry are missed. 
+-- A server tick with nothing new completes the announcement and ends the search.
+-- Later events at those tiles are changes (a barrier cut, a key taken). Nodes are announced as
 -- their MultiLoc (`addedAs`).
 local anyAnnounced = false -- a feature was announced, so the locations are not scanned
 local announcedInBurst = false -- a feature was announced in the first burst
@@ -352,8 +346,7 @@ local announcedThisTick = false
 local announcementsEnded = false
 local announcingTicksLeft = 0 -- server ticks to wait for the burst; set only on a region's creation
 
--- Counts a hostile monster: an attackable NPC that is neither a familiar nor one of the forest's own NPCs (the
--- traitor is attackable but is a task). Each entity counts once, by uid.
+-- Counts a hostile monster: an attackable NPC that is neither a familiar nor one of the forest's passive NPCs 
 local function noteMonster(npcEntity)
     local npcConfig = npcEntity.config
     if npcConfig.attackOpIndex < 0 or npcConfig.isFamiliar then return end
@@ -366,12 +359,12 @@ end
 local function noteNpc(npcEntity)
     local feature = featureOfNpcID[npcEntity.configID]
     if feature == nil then return noteMonster(npcEntity) end
-    -- An NPC back in view is a new entity, but a forest has at most one of each NPC listed (the lightning, the lost
-    -- goebie, the Traitor), so it keeps its marker, which followNpcs moves to it.
+    -- Updates the noted possition of a passive NPC
+    -- An npc that deloads and reloads due to distance is noted as the same npc orignally seen.
     for _, known in ipairs(npcsFound) do
         if known.feature == feature then return end
     end
-    local coord = npcEntity.coordGrid
+    local coord = npcEntity.routeEnd
     npcsFound[#npcsFound + 1] = {
         feature = feature, x = coord.x + 0.5, z = coord.z + 0.5, width = 1, length = 1, isNpc = true,
         npcID = npcEntity.configID,
@@ -381,8 +374,7 @@ local function noteNpc(npcEntity)
     foundChanged = true
 end
 
--- Returns a found location's entry: its centre in tiles, its size and shape as placed (width and length turned
--- with it), and the box around its model (src/game/model_bounds.lua).
+-- Returns a found location's centre in tiles, size and highlight bounds.
 local function locationEntry(feature, coord, rotation, width, length, shapeType)
     return {
         feature = feature, x = coord.x + width / 2, z = coord.z + length / 2, width = width, length = length,
@@ -392,7 +384,7 @@ end
 
 -- Reads the standing heights of zones not read yet, and returns whether any zone was read.
 -- A zone reads as nothing standing until the client loads its models, which for a far zone waits until the player
--- comes nearer, so it is retried as the player moves.
+-- comes nearer, and is retried as the player moves.
 local builtGrid = nil -- the last grid built, held back from Forest.grid until settled or due
 
 -- Returns whether two zones' standing heights differ.
@@ -403,8 +395,7 @@ local function heightsDiffer(first, second)
     return false
 end
 
--- Reads the heights of the zones not read yet, and of those whose turns tied, as a read from nearer may hold what a
--- read from afar lacked. Returns whether any were read anew.
+-- Reads the heights of the zones not read yet, Returns whether any have new information.
 local function readStanding()
     local level = Player.GetEntity().coordGrid.level
     local anyRead = false
@@ -427,15 +418,10 @@ local function scanNpcs()
     for _, npcEntity in ipairs(NPCList.All()) do noteNpc(npcEntity) end
 end
 
--- With the plugin reloaded inside a forest, the server's announcement has passed, so only scans find its nodes, keys
--- and doors. On a fresh entry the announcement gives everything the scans would, so the locations are scanned only
--- if the events are missed.
+-- Scanning non-npcs is only needed if the events were missed on forest entry.
 local announcementMissed = false
 
--- Scans every location the client holds, unless the announcement gave them, and reads the zones' standing heights
--- and the NPCs. Asking the game for a config's locations, minus hidden ones, finds only those within about 45 tiles,
--- though the client holds the whole forest's from the entrance; so this reads the full list and counts hidden ones.
--- Locations and heights arrive over the first server ticks, so scans continue until nothing new turns up for a while.
+-- Scans every location the client holds and reads the zones' standing heights and the NPCs.
 local function scan()
     -- only a find or new change restarts the settling
     local changedBefore = foundChanged
@@ -462,9 +448,8 @@ local function scan()
 end
 
 -- The grid is rebuilt when its inputs change, keeping the last one built if the new one would be the same, so routes
--- and plan searches cached on it stay valid. The server tick puts it in Forest.grid once it is settled (every zone
--- whose turn matters turned by its heights) or GRID_WAIT_TICKS have passed since entering, so the map's zones, the
--- routes and the plans are not worked out on the unturned zones of the first ticks, while the zones load.
+-- and plan searches cached on it stay valid. The server tick puts it in Forest.grid once it is settled or after GRID_WAIT_TICKS
+-- Route calculations wait until the grid is published to start in order to avoid unnecessary work.
 local GRID_WAIT_TICKS = 6 -- about four seconds; at High draw distance (raised on entering) the zones load in 3 ticks
 local gridDueTick = 0 -- the server tick from which an unsettled grid is used
 
@@ -563,8 +548,7 @@ local function followPlayer()
     Forest.onMoved()
 end
 
--- Drops everything of a forest on leaving, as the instance is gone once all players leave. The grid goes with the
--- searches cached on it (routes.lua, solve_plan.lua).
+-- Drops everything on leaving the forest
 local function forgetForest()
     Forest.zones, Forest.bounds, Forest.openings = {}, nil, {}
     Forest.found, Forest.countOf, Forest.doorsGone, Forest.following = {}, {}, {}, {}
@@ -573,7 +557,7 @@ local function forgetForest()
     Forest.grid, builtGrid, Forest.zoneTurns = nil, nil, nil
     Forest.playerTile, Forest.entryTile = nil, nil
     Forest.monstersSpawned = 0
-    npcsFound, monstersSeen, taskItemsHeld, itemsHeldNow = {}, {}, {}, nil
+    npcsFound, monstersSeen, tasksActive, itemsHeldNow = {}, {}, {}, nil
     npcsArrived = false
 end
 
@@ -638,22 +622,17 @@ local function enter(region)
     Forest.zones, Forest.bounds, Forest.openings = region.zones, region.bounds, region.openings
     foundChanged, gridStale, settlingTicksLeft = true, true, SETTLING_TICKS
     Event.NPCEntityAdded.Subscribe(SUBSCRIPTION, function() npcsArrived = true end)
-    -- Every inventory the server sends fires this (each item gathered at a node, the bank, the coin pouch), but
-    -- only the backpack and worn items hold tools and task items.
     Event.InventoryUpdated.Subscribe(SUBSCRIPTION, function(event)
         if not isHeldInventory[event.inv.id] then return end
         itemsHeldNow = nil
         if Forest.playerTile ~= nil then Forest.onInventoryChanged() end
-        -- a task's item gained or lost: publish next tick, for the legend and highlights
-        for task in pairs(doneItemOf) do
-            local holds = holdsDoneItem(task)
-            if holds ~= (taskItemsHeld[task] == true) then
-                taskItemsHeld[task] = holds
-                foundChanged = true
-            end
+        -- a target done or needed again by an item gained or lost: publish next tick, for the legend and highlights
+        for _, task in ipairs(ForestFeatures.trinksTasks) do
+            local isActive = Forest.isTaskActive(task)
+            if isActive ~= tasksActive[task] then tasksActive[task], foundChanged = isActive, true end
         end
     end)
-    for task in pairs(doneItemOf) do taskItemsHeld[task] = holdsDoneItem(task) end
+    for _, task in ipairs(ForestFeatures.trinksTasks) do tasksActive[task] = Forest.isTaskActive(task) end
     -- a node claimed: the server sends the variable, and the node is republished as used
     Forest.readClaimedToday()
     Event.VarTransmit.Subscribe(SUBSCRIPTION, function(event)
@@ -661,12 +640,10 @@ local function enter(region)
             Forest.readClaimedToday()
             foundChanged = true
         end
-        -- a task's target done (the Traitor killed). The current task changes only at Trinks, outside the forest.
-        if doneBaseIDs[event.var.id] then foundChanged = true end
+        -- a task's goal is completed.
+        if targetBaseIDs[event.var.id] then foundChanged = true end
     end)
-    -- The draw distance goes up to High until the grid settles (draw_distance.lua). Only from Low does the server then
-    -- send more (the far map squares, a tick later): that is waited for as a second announcement, and quiet ticks end
-    -- the search if none comes. From Medium the server has sent the whole forest already, so nothing is waited for.
+    -- Raises Draw distance temporarily. see (draw_distance.lua) for details.
     if DrawDistance.raise() then
         announcedInBurst, announcedThisTick, announcementsEnded = false, false, false
         announcingTicksLeft = ANNOUNCING_TICKS
@@ -677,11 +654,10 @@ end
 -- Moves each found NPC's marker to its tile once a server tick, so its route ends at it.
 local function followNpcs()
     for _, entry in ipairs(npcsFound) do
-        -- the forest has one of each, listed only while in view
         local npcEntity = NPCList.ByConfigID(entry.npcID)[1]
         if npcEntity ~= nil then
             entry.npcEntity = npcEntity
-            local coord = npcEntity.coordGrid
+            local coord = npcEntity.routeEnd
             local x, z = coord.x + 0.5, coord.z + 0.5
             if entry.x ~= x or entry.z ~= z then
                 entry.x, entry.z = x, z
@@ -691,11 +667,10 @@ local function followNpcs()
     end
 end
 
--- Runs once per server tick while a region is watched: waits until the region is recognised as the forest, then
--- scans until the search settles, and follows the player.
+-- Runs once per server tick while a region is watched:
+-- scans until the search settles, and routes follow the player.
 local function onServerTick()
     Forest.ticks = Forest.ticks + 1
-    -- a tick with nothing new announced completes the announcement
     if not announcementsEnded and announcedInBurst and not announcedThisTick then announcementsEnded = true end
     announcedThisTick = false
     announcingTicksLeft = announcingTicksLeft - 1
@@ -711,11 +686,7 @@ local function onServerTick()
         if region == nil then return end
         enter(region)
     end
-    -- the scans read the player's level, and the player is briefly unavailable while the world changes
     if not Player.IsAvailable() then return end
-    -- While the forest settles, the zones' heights and the NPCs are read each tick, and the locations too until
-    -- something is announced; after that the locations' changes come as events, and NPCs are looked for when some
-    -- arrive.
     if settlingTicksLeft > 0 then
         settlingTicksLeft = settlingTicksLeft - 1
         scan()
@@ -723,14 +694,12 @@ local function onServerTick()
         scanNpcs()
     end
     npcsArrived = false
-    -- the search ending is a change too, as the windows show whether it is still going; it does not come back
+    -- the search ending is a change too, as the windows show whether it is still going;
     if Forest.isSearching and (announcementsEnded or settlingTicksLeft <= SETTLING_TICKS - SHOWN_SETTLED_AFTER) then
         Forest.isSearching, foundChanged = false, true
     end
     readDialogue()
     freeKeysOfPlayersGone()
-    -- The player's tile first, so what follows works from where the player is now, and the heights read on stepping
-    -- into a new zone reach the grid on this tick.
     followPlayer()
     followNpcs()
     -- heights read by a scan or a step may change the grid without a find
@@ -744,13 +713,11 @@ local function onServerTick()
         Forest.grid, foundChanged = builtGrid, true
     end
     if foundChanged then publish() end
-    -- After a reload only the scans find the nodes, keys and doors, so the draw distance stays up until they settle
-    -- too, as the client lets far squares go below Medium.
     if Forest.grid ~= nil and (not announcementMissed or settlingTicksLeft == 0) then DrawDistance.restore() end
 end
 
 -- Listens for added locations from the region's creation.
--- isNew is false when the plugin loaded inside the forest, after its announcement.
+-- isNew is false when the plugin loaded inside the forest.
 local function watchRegion(isNew)
     arrivalTicksLeft = ARRIVAL_TICKS
     announcementMissed = not isNew
@@ -761,18 +728,12 @@ local function watchRegion(isNew)
     Event.LocRemoved.Subscribe(SUBSCRIPTION, onLocationRemoved)
 end
 
--- Returns the active Trinks' tasks that are NPCs and not yet seen, as NPCs only load near the player.
-function Forest.tasksUnseen()
-    local unseen = {}
-    for _, task in ipairs(ForestFeatures.trinksTasks) do
-        if task.npcs ~= nil and (Forest.countOf[task.key] or 0) == 0 and Forest.isTaskActive(task) then
-            unseen[#unseen + 1] = task
-        end
-    end
-    return unseen
+-- Returns whether the Traitor's task is active and the Traitor hasn't been seen yet.
+function Forest.isTraitorUnseen()
+    return (Forest.countOf.traitor or 0) == 0 and Forest.isTaskActive(ForestFeatures.byKey.traitor)
 end
 
--- Returns the puzzles whose barrier is found but not its key, as NPC keys only load near the player.
+-- Returns the puzzles whose barrier is found but not its key
 function Forest.keysUnseen()
     local unseen = {}
     for _, toolPair in ipairs(ForestFeatures.tools) do
@@ -792,9 +753,8 @@ function Forest.barriersLeft()
     return false
 end
 
--- The nodes the rotation (ForestFeatures.nodeRotation) says were missed: for each pair of found nodes adjacent in
+-- The nodes the ordering (ForestFeatures.nodeRotation) says were missed: for each pair of found nodes adjacent in
 -- reading order (zone rows south to north, each west to east), the features of the kinds skipped between them.
--- A node missed before the first or after the last cannot be detected.
 local rotationFeatures, rotationIndexOf = ForestFeatures.nodesInRotation, {}
 for index, node in ipairs(rotationFeatures) do rotationIndexOf[node.key] = index - 1 end
 function Forest.nodesMissedByRotation()
@@ -822,9 +782,6 @@ function Forest.nodesMissedByRotation()
     return missed
 end
 
--- Returns the scout window's counts: node kinds found, plus kinds the rotation says were missed and none was found
--- of (once the search settles); the missed nodes' features in rotation order; and the kinds counted as missed
--- (key -> true).
 function Forest.scoutCounts()
     local kinds = Forest.nodeCounts()
     local missed, missedKinds = Forest.isSearching and {} or Forest.nodesMissedByRotation(), {}
@@ -837,11 +794,9 @@ function Forest.scoutCounts()
     return kinds, missed, missedKinds
 end
 
--- Returns whether the forest has every node kind, from the scout window's counts, or with neededOnly every kind still
--- unclaimed today.
+-- Returns true when we should trigger scouting alerts.
 function Forest.isFull(kinds, missedKinds, neededOnly)
     if kinds >= #ForestFeatures.nodes then return true end
-    -- which nodes the forest has is known only once the search settles
     if not neededOnly or Forest.isSearching then return false end
     local needed = 0
     for _, node in ipairs(ForestFeatures.nodes) do
@@ -870,7 +825,6 @@ function Forest.start()
         watchRegion(true)
     end)
     Event.WorldCreated.Subscribe(SUBSCRIPTION, stopWatching)
-    -- the plugin may load with the player already in the forest
     if World.IsAvailable() and World.IsRegion() then watchRegion(false) end
 end
 
