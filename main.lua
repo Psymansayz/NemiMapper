@@ -131,6 +131,12 @@ SettingsPage.onChange = {
     highlights = Highlights.refresh,
     scout = ScoutWindow.showSettings,
     routes = function() RouteChoice.onDrawn(false) end, -- they only draw the route
+    -- The route takes its colour when worked out, so it is worked out again.
+    colours = function()
+        MapWindow.showColours()
+        RouteChoice.update(false)
+        Highlights.refresh()
+    end,
     sharing = function()
         -- A shared map shows the final route.
         -- A chosen route would replace it, and NAVIGATE's or SOLVE's would have no button left to turn it off.

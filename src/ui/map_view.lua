@@ -104,7 +104,7 @@ function MapView.shownPuzzles()
         local held = ToolsHeld.held
         local unneeded, needed = ForestStops.mappingPlan(held).unneeded, {}
         for _, entry in ipairs(Forest.found) do
-            if entry.feature.isPuzzle and ForestStops.isPuzzleNeeded(entry, held, unneeded) then
+            if entry.feature.isPuzzle and not unneeded[entry] and ForestStops.isPuzzleLeft(entry, held) then
                 needed[entry.feature.pair] = true
             end
         end

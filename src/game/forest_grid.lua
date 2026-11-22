@@ -14,8 +14,7 @@ local ZONE_TILES = ZONE_SIZE * ZONE_SIZE
 local Grid = {}
 Grid.__index = Grid
 
--- Returns whether the template zone sourceKey has anything standing on it, so that its heights can tell its turn.
--- The data leaves out a zone with nothing standing.
+-- The data leaves out a zone with no standing heights (such as the entrance).
 function ForestGrid.hasStanding(sourceKey)
     return TemplateStanding[sourceKey] ~= nil
 end
@@ -35,17 +34,16 @@ for quarterTurns = 0, 3 do
     turnedIndex[quarterTurns] = indexes
 end
 
--- Returns values, a zone's 64 per-tile values (indexed as turnedIndex), turned clockwise quarterTurns times.
+-- Returns values, a zone's tile walkablility data turned clockwise quarterTurns times.
 local function turnedTiles(values, quarterTurns)
     local turnedValues = {}
     for index, turned in ipairs(turnedIndex[quarterTurns]) do turnedValues[turned] = values[index] end
     return turnedValues
 end
 
--- Returns the clockwise quarter turns that best match the template zone sourceKey's standing heights to
--- standing, as a list: more than one when several match equally well.
--- The forest replaces a few tiles (nodes, barriers) and a zone read from afar lacks small plants, but the turn with the
--- most matching tiles still stands out.
+-- Returns the number of turns needed for a zone in the current forest to match it's template's orientation.
+-- The forest replaces a few tiles (nodes, barriers) and a zone read from afar lacks small plants, so it
+-- may not be a perfect match to the template.
 local function turnsByStanding(sourceKey, standing)
     if standing == nil then return nil end
     local template = TemplateStanding[sourceKey]
@@ -64,7 +62,7 @@ local function turnsByStanding(sourceKey, standing)
     return bestTurns
 end
 
--- Returns the template zone sourceKey's ground flags, indexed as in turnedTiles, from the data's text rows.
+-- parses the template's walkability data.
 local function groundTiles(sourceKey)
     local rows, tiles = ZoneWalkability[sourceKey], {}
     for z = 0, ZONE_SIZE - 1 do
@@ -76,10 +74,7 @@ local function groundTiles(sourceKey)
     return tiles
 end
 
--- Cache of each template zone in every turn: "x_z" -> { ground, groundKey, turnMatters }. ground: by quarter turns,
--- its walkable tiles as flat x, z offset pairs from the south-west corner, and groundKey the same as a string to
--- compare. turnMatters: whether its turns differ in which tiles are walkable; one that does not (open ground) cannot
--- be turned wrongly.
+-- Cache of each template zone in every orientation.
 local groundTurnsCache = {}
 local function groundTurns(sourceKey)
     local template = groundTurnsCache[sourceKey]
@@ -102,6 +97,7 @@ local function groundTurns(sourceKey)
 end
 
 -- Returns whether the turns give a zone the same walkable tiles.
+-- used for tie breaks when detecting rotation.
 local function sameGround(template, turns)
     for _, quarterTurns in ipairs(turns) do
         if template.groundKey[quarterTurns] ~= template.groundKey[turns[1]] then return false end
@@ -109,13 +105,8 @@ local function sameGround(template, turns)
     return true
 end
 
--- Returns the grid over the forest's bounds (minX, minZ, width, length in tiles) with every zone's tiles.
--- standingByZone: "x,z" of a zone -> its 64 standing heights (src/game/standing_heights.lua).
--- grid.settled is false while a zone whose turn matters has no heights to turn it by, or turns that match its heights
--- equally well and differ in its walkable tiles; one of those is taken meanwhile, and grid.tiedZones has the zone's
--- "x,z" for its heights to be read again from nearer.
--- A forest's zones never change, so its tiles follow from the turns: previous, the forest's last grid, is returned
--- when the turns and settledness are the same.
+-- Returns the current forest's walkable tiles.
+-- grid.settled indicates whether all zones have had their correct rotations identified.
 function ForestGrid.build(zones, bounds, standingByZone, previous)
     local turnsOf, settled, tied = {}, true, {}
     for index, zone in ipairs(zones) do
@@ -133,7 +124,7 @@ function ForestGrid.build(zones, bounds, standingByZone, previous)
         for index, turns in ipairs(turnsOf) do same = same and previous.turns[index] == turns end
         if same then
             previous.tiedZones = tied
-            return previous
+            return previous -- return early if no zone has new information.
         end
     end
     local grid = setmetatable({

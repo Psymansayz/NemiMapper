@@ -187,7 +187,9 @@ local function isMarkerShown(map, entry, held, unneeded)
     local shows, feature = view(), entry.feature
     -- The route's stops stay by their own setting, except a key just taken, as the route is about to move on.
     if map.stopsShown[entry] and not (feature.kind == "source" and held[feature.key]) then return true end
-    if feature.isPuzzle then return shows.puzzleElements and ForestStops.isPuzzleNeeded(entry, held, unneeded) end
+    if feature.isPuzzle then
+        return shows.puzzleElements and not unneeded[entry] and ForestStops.isPuzzleLeft(entry, held)
+    end
     if feature.kind == "node" then return shows.nodes and (shows.usedNodes or not entry.isUsed) end
     if feature.kind == "task" then return shows.tasks or Forest.isTaskActive(feature) end
     return true

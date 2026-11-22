@@ -128,7 +128,8 @@ function NodeLegend.build(map, content)
             row.missing = MapWidgets.create(ui.Rectangle, content)
             row.missing.fill = true
             row.missing.rgba = MISSING_COLOUR
-            row.outline = MapWidgets.addOutline(content, ForestFeatures.colourOf(feature))
+            row.outlineColour = ForestFeatures.colourOf(feature)
+            row.outline = MapWidgets.addOutline(content, row.outlineColour)
             row.hover = MapWidgets.addHover(content, row.cell, cannotRoute)
             map.legendRows[#map.legendRows + 1] = row
         end
@@ -184,6 +185,17 @@ function NodeLegend.showStates(map)
         end
     end
     MapWidgets.showButton(map.mapRouteButton, RouteChoice.isPlanChosen("navigate"))
+end
+
+-- Gives each row's outline its feature's colour, after a colour setting changes.
+function NodeLegend.showColours(map)
+    for _, row in ipairs(map.legendRows) do
+        local colour = ForestFeatures.colourOf(row.feature)
+        if row.outlineColour ~= colour then
+            row.outlineColour = colour
+            row.outline.rgba = colour
+        end
+    end
 end
 
 -- Lays the legend out in box ({ left, top, width, height }), keeping the dividers' heights in box.lines.

@@ -132,7 +132,7 @@ end
 -- Returns the final route: the ways from the entrance to each reachable node and to the exit, as a
 -- list of routes, each a list of tiles: the farthest first, whole from the entrance, then each other from where it
 -- leaves the tree to its end.
--- Searching each leg apart can find other equally short ways through open ground, which would draw loops and
+-- Searching each way apart can find other equally short ways through open ground, which would draw loops and
 -- parallel lines, so the ways come from one search and form a tree, with no way drawn twice or alongside another.
 -- Nodes shut in by rocks or behind a barrier the final route ignores, and an unreachable exit, are left out, so
 -- every piece drawn can be walked.

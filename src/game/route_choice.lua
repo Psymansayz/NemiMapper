@@ -74,6 +74,13 @@ local function drawnRoute(tiles, colour, target, stops, keysUnseen)
     return tiles and { tiles = tiles, colour = colour, target = target, stops = stops, keysUnseen = keysUnseen }
 end
 
+-- Returns the colour of the route to a stop: its feature's, read now as the colour settings may have changed since
+-- the plan was made, or an entrance sign's.
+local function colourOf(stop)
+    local feature = stop.entry.feature
+    return feature ~= nil and ForestFeatures.colourOf(feature) or stop.colour
+end
+
 -- Returns the chosen route from the player (RouteChoice.drawn).
 -- A plan keeps the last route's target (keep) while it is still a stop, so only finishing it, leaving the route or
 -- choosing again switch targets.
@@ -99,7 +106,7 @@ local function chosenRoute(player, keep)
                 if plan.takenKeys[takenStop.entry.feature.key] then
                     local route = Routes.routeTo(Forest.grid, player, { takenStop }, blocked)
                     if route ~= nil then
-                        return drawnRoute(route, takenStop.colour, takenStop.entry, { [takenStop.entry] = true })
+                        return drawnRoute(route, colourOf(takenStop), takenStop.entry, { [takenStop.entry] = true })
                     end
                 end
             end
@@ -107,7 +114,7 @@ local function chosenRoute(player, keep)
             if #doors == 0 then return nil end
             local keysUnseen = {}
             for _, door in ipairs(doors) do keysUnseen[#keysUnseen + 1] = door.entry.feature.pair.source.name end
-            return drawnRoute(Routes.routeTowardCentre(Forest.grid, player, blocked), doors[1].colour, nil,
+            return drawnRoute(Routes.routeTowardCentre(Forest.grid, player, blocked), colourOf(doors[1]), nil,
                 stopsOf(plan), keysUnseen)
         end
         -- A kept plan's stop has the tiles its NPC was found on, but the route goes to where the NPC is now.
@@ -120,14 +127,14 @@ local function chosenRoute(player, keep)
         end
         local entries = stopsOf(plan)
         entries[stop.entry] = true
-        return drawnRoute(route, stop.colour, stop.entry, entries)
+        return drawnRoute(route, colourOf(stop), stop.entry, entries)
     end
 
     -- Returns the route to the nearest of targets (stops) past no barrier, or else the named plan's toward the one
     -- nearest with the barriers open.
     local function routeOrPlan(targets, name)
         local route, reached = Routes.routeTo(Forest.grid, player, targets, blocked)
-        if route ~= nil then return drawnRoute(route, reached.colour, reached.entry, { [reached.entry] = true }) end
+        if route ~= nil then return drawnRoute(route, colourOf(reached), reached.entry, { [reached.entry] = true }) end
         local openRoute, openReached = Routes.routeTo(Forest.grid, player, targets)
         if openRoute == nil then return nil end
         return routeByPlan(name, ForestStops.stopsToward({ openReached }, player, held))

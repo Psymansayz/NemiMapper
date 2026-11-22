@@ -17,10 +17,12 @@
 --              last two and pair, their puzzle
 --   layer      the order the map draws the kinds in, doors first
 
+local Settings = require("src/data/settings")
+
 local ForestFeatures = {}
 
 -- Returns a skill node's feature.
--- A node shows as _OP while usable today and _NOOP once used. Its claim is in VarBit RAID1_FOREST_<claimed>
+-- A node shows as _OP while usable today and _NOOP once used.
 local function node(key, name, content, skill, claimed)
     local location = "RAID1_FOREST_DEADEND_CONTENT_" .. content
     return {
@@ -30,13 +32,13 @@ local function node(key, name, content, skill, claimed)
     }
 end
 
--- A node's colour, by skill, for its routes, legend row and in-world box. Each is apart from the puzzle pairs' colours
--- (below) and Trinks' tasks', so a route or box tells which kind of feature it leads to.
-ForestFeatures.skillColours = {
-    prayer = 0x2F6FD6FF, farming = 0xB4F03CFF, mining = 0x7A4A24FF, dungeoneering = 0x1FA392FF,
-}
-
 -- The nine skill nodes, in legend order.
+-- The game's names for a node differ from each other and from what the player sees, so each is given.
+--   key      the plugin's name for the node: its icon and its key in ForestFeatures.byKey
+--   name     the name the legend shows
+--   content  the game's location name, RAID1_FOREST_DEADEND_CONTENT_<content>
+--   skill    the skill it trains
+--   claimed  the game's VarBit set once its XP is claimed today, RAID1_FOREST_<claimed>
 ForestFeatures.nodes = {
     node("chest", "Chest", "CHEST", "dungeoneering", "CHEST"),
     node("fungus", "Fungal growth", "FUNGUS", "farming", "FUNGUS"),
@@ -68,22 +70,7 @@ end
 --   questStruct  the task's struct, which the enum RAID1_GOEBIE_IDS_TO_STRUCTS maps to
 --                RAID1_GOEBIE_CURRENT_QUEST's value
 --   parts        what the game counts toward the task: a VarBit (var) or backpack items (item), up to `of`
--- Two have a target in the forest, which is a feature too (ForestFeatures.trinksTasks). The plant can only be picked
--- while on its task.
---   doneVar      the VarBit that becomes non-zero once the target is done (1 on killing the Traitor)
---   doneItem     the backpack item that shows it is done instead, since picking the fruit sets no variable
 local NPCS, LOCATIONS = "RAID1_GOEBIE_NPC_SUBTASK", "RAID1_GOEBIE_LOC_SUBTASK"
-local PAHTLI = {
-    key = "pahtli", name = "Pahtli Plant", questStruct = "RAID1_GOEBIE_MINIQUEST_10", parts = {},
-    doneItem = "RAID1_GOEBIE_MINIQUEST_FRUIT",
-    locations = { "RAID1_GOEBIE_MINIQUEST_FRUIT", "RAID1_GOEBIE_MINIQUEST_FRUIT_NO_OP" },
-    addedAs = "RAID1_GOEBIE_MINIQUEST_FRUIT_MULTI",
-}
-local TRAITOR = {
-    key = "traitor", name = "Traitor", questStruct = "RAID1_GOEBIE_MINIQUEST_9",
-    parts = { { var = NPCS, of = 1, what = "Traitor" } },
-    npcs = { "RAID1_GOEBIE_TRAITOR" }, doneVar = NPCS,
-}
 ForestFeatures.dailyTasks = {
     { name = "Kill Airut", questStruct = "RAID1_GOEBIE_MINIQUEST_1",
         parts = { { var = NPCS, of = 10, what = "Airut" } } },
@@ -101,11 +88,15 @@ ForestFeatures.dailyTasks = {
         parts = { { var = NPCS, of = 1, what = "message" } } },
     { name = "Free Goebies", questStruct = "RAID1_GOEBIE_MINIQUEST_8",     -- caged by the Airut
         parts = { { var = NPCS, of = 5, what = "Airut" }, { var = LOCATIONS, of = 5, what = "freed" } } },
-    TRAITOR,
-    PAHTLI,
+    { key = "traitor", name = "Traitor", questStruct = "RAID1_GOEBIE_MINIQUEST_9",
+        parts = { { var = NPCS, of = 1, what = "Traitor" } }, npcs = { "RAID1_GOEBIE_TRAITOR" } },
+    { key = "pahtli", name = "Pahtli Plant", questStruct = "RAID1_GOEBIE_MINIQUEST_10",
+        parts = { { item = "RAID1_GOEBIE_MINIQUEST_FRUIT", of = 1, what = "fruit" } },
+        locations = { "RAID1_GOEBIE_MINIQUEST_FRUIT", "RAID1_GOEBIE_MINIQUEST_FRUIT_NO_OP" },
+        addedAs = "RAID1_GOEBIE_MINIQUEST_FRUIT_MULTI" },
 }
--- The tasks' targets in the forest, in legend order.
-ForestFeatures.trinksTasks = { PAHTLI, TRAITOR }
+-- These two have addiitonal navigation in the forest.
+ForestFeatures.trinksTasks = { ForestFeatures.dailyTasks[10], ForestFeatures.dailyTasks[9] }
 
 -- Each puzzle's tool, its source ("key") and the barrier it opens ("door").
 -- An opened barrier becomes an unlisted location, so it drops off the map.
@@ -155,21 +146,17 @@ ForestFeatures.tools = {
     },
 }
 
--- The most monsters one forest can spawn, per the wiki. They spawn as the player walks into dead ends.
+-- The most monsters one forest can spawn
 -- Any NPC with an Attack option that is not a familiar and not listed above counts.
 ForestFeatures.monstersAtMost = 25
-
--- Trinks gives this many tasks a day.
+-- Maximum number of Trinks' tasks per day
 ForestFeatures.tasksADay = 3
 
--- The trail signs at the forest's openings, each on its side's edge pointing out of the forest, and the colour of the
--- route to one (the signs' painted letters). A click routes to the sign's opening, as a click on a feature does.
 ForestFeatures.entranceSigns = {
     { key = "sign_otot", side = "north", colour = 0xF7E1A0FF },
     { key = "sign_kanatah", side = "east", colour = 0xF7E1A0FF },
 }
 
--- Every feature, and each by its key.
 ForestFeatures.all, ForestFeatures.byKey = {}, {}
 local function describe(feature, kind, layer)
     feature.kind, feature.layer, feature.isPuzzle = kind, layer, kind == "source" or kind == "barrier"
@@ -184,12 +171,17 @@ end
 for _, task in ipairs(ForestFeatures.trinksTasks) do describe(task, "task", 3) end
 for _, node in ipairs(ForestFeatures.nodes) do describe(node, "node", 4) end
 
--- A feature's colour, for its routes, rows and boxes: a node's skill's, a puzzle's pair's, or Trinks' tasks'.
-local TASK_COLOUR = 0xF2E05AFF -- yellow: the burning log's puzzle has the orange
+-- The setting holding each skill's node colour.
+local SKILL_COLOUR_SETTING = {
+    prayer = "prayerColour", farming = "farmingColour", mining = "miningColour", dungeoneering = "dungeoneeringColour",
+}
+
+-- Returns a feature's colour, for its routes, rows and boxes: its skill's or Trinks' tasks', as set, or its puzzle
+-- pair's.
 function ForestFeatures.colourOf(feature)
-    if feature.kind == "node" then return ForestFeatures.skillColours[feature.skill] end
+    if feature.kind == "node" then return Settings[SKILL_COLOUR_SETTING[feature.skill]] end
     if feature.isPuzzle then return feature.pair.colour end
-    return TASK_COLOUR
+    return Settings.tasksColour
 end
 
 return ForestFeatures
