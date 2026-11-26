@@ -421,13 +421,15 @@ end
 -- Scanning non-npcs is only needed if the events were missed on forest entry.
 local announcementMissed = false
 
--- Scans every location the client holds and reads the zones' standing heights and the NPCs.
+local SCAN_RANGE = 128 -- tiles from the player: twice a forest's width
+
+-- Scans the locations near the player and reads the zones' standing heights and the NPCs.
 local function scan()
     -- only a find or new change restarts the settling
     local changedBefore = foundChanged
     foundChanged = false
     if announcementMissed or not anyAnnounced then
-        for _, location in ipairs(LocList.All()) do
+        for _, location in ipairs(LocList.ByDistance(Player.GetEntity().coordGrid, SCAN_RANGE, true)) do
             local feature = featureOfLocID[location.configID]
             if feature ~= nil then
                 local coord = location.coordGrid
