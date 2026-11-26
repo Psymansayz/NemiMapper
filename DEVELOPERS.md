@@ -198,8 +198,8 @@ announced at a known tile updates its entry in place.
 **How features are found.**
 1. On a fresh entry the server announces every node, key and barrier as `LocAdded` events in its first ticks,
    before the client loads them. `onLocationAdded` turns each into an entry in `locationsFound` (by packed tile).
-2. After a reload inside a forest the announcement has passed, so `scan()` reads the locations within `SCAN_RANGE` tiles
-   of the player (`LocList.ByDistance`) each settling tick instead.
+2. After a reload inside a forest the announcement has passed, so `scan()` reads `LocList.All()` each settling tick
+   instead.
 3. `LocRemoved`, or another location replacing one of the same shape on its tile, drops the entry. That is how a
    door opened by anyone drops off the map.
 4. NPCs come from `NPCList.All()` while settling, then again on the tick after `NPCEntityAdded`.
